@@ -34,7 +34,7 @@ services:
     build:
       context: ./backend
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://geolens:geolens_dev_password@postgres:5432/geolens}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://geolens:geolens_dev_password@postgres:5432/geolens}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     ports:
       - "${BACKEND_PORT:-8000}:8000"

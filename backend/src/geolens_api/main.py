@@ -1,21 +1,31 @@
-from typing import Literal
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from pydantic import BaseModel
+
+from geolens_api.config import get_settings
+from geolens_api.database import engine
+from geolens_api.routers import projects_router, system_router
 
 
-class HealthResponse(BaseModel):
-    status: Literal["ok"]
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    yield
+    await engine.dispose()
 
 
-app = FastAPI(
-    title="GeoLens API",
-    description="API foundation for GeoLens.",
-    version="0.1.0",
-)
+def create_app() -> FastAPI:
+    settings = get_settings()
+    application = FastAPI(
+        title=settings.app_name,
+        description="AI visibility and citation intelligence API.",
+        version="0.1.0",
+        debug=settings.debug,
+        lifespan=lifespan,
+    )
+    application.include_router(system_router)
+    application.include_router(projects_router)
+    return application
 
 
-@app.get("/health", response_model=HealthResponse, tags=["system"])
-async def health() -> HealthResponse:
-    """Report process-level API health."""
-    return HealthResponse(status="ok")
+app = create_app()

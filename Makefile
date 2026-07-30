@@ -9,7 +9,7 @@ NPM ?= npm
 endif
 
 .PHONY: setup setup-backend setup-frontend lint lint-backend lint-frontend \
-	test test-backend test-frontend build check infra up down
+	typecheck migrate test test-backend test-integration test-frontend build check infra up down
 
 setup: setup-backend setup-frontend
 
@@ -29,10 +29,19 @@ lint-backend:
 lint-frontend:
 	$(NPM) --prefix frontend run lint
 
+typecheck:
+	$(BACKEND_PYTHON) -m mypy backend
+
+migrate:
+	$(BACKEND_PYTHON) -m alembic -c backend/alembic.ini upgrade head
+
 test: test-backend test-frontend
 
 test-backend:
 	$(BACKEND_PYTHON) -m pytest backend
+
+test-integration:
+	$(BACKEND_PYTHON) -m pytest backend/tests/integration
 
 test-frontend:
 	$(NPM) --prefix frontend run test
@@ -40,7 +49,7 @@ test-frontend:
 build:
 	$(NPM) --prefix frontend run build
 
-check: lint test build
+check: lint typecheck test build
 	docker compose config --quiet
 
 infra:

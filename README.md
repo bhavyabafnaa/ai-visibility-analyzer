@@ -47,11 +47,18 @@ Build and start all four services:
 docker compose up --build
 ```
 
+Apply database migrations:
+
+```sh
+make migrate
+```
+
 The services are then available at:
 
 - Frontend: <http://localhost:3000>
 - Backend API: <http://localhost:8000>
 - Backend health: <http://localhost:8000/health>
+- Backend readiness: <http://localhost:8000/ready>
 - OpenAPI documentation: <http://localhost:8000/docs>
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
@@ -104,7 +111,9 @@ If GNU Make is available:
 
 ```sh
 make setup
+make migrate
 make lint
+make typecheck
 make test
 make build
 make check
@@ -120,6 +129,8 @@ PowerShell:
 ```powershell
 backend\.venv\Scripts\python -m ruff check backend
 backend\.venv\Scripts\python -m ruff format --check backend
+backend\.venv\Scripts\python -m mypy backend
+backend\.venv\Scripts\python -m alembic -c backend/alembic.ini upgrade head
 backend\.venv\Scripts\python -m pytest backend
 npm --prefix frontend run lint
 npm --prefix frontend run test
@@ -132,6 +143,8 @@ macOS or Linux:
 ```sh
 backend/.venv/bin/python -m ruff check backend
 backend/.venv/bin/python -m ruff format --check backend
+backend/.venv/bin/python -m mypy backend
+backend/.venv/bin/python -m alembic -c backend/alembic.ini upgrade head
 backend/.venv/bin/python -m pytest backend
 npm --prefix frontend run lint
 npm --prefix frontend run test
@@ -141,3 +154,11 @@ docker compose config --quiet
 
 The frontend test command currently succeeds with no tests. Test coverage should be added
 alongside the first frontend behavior.
+
+PostgreSQL integration tests require `TEST_DATABASE_URL` to identify a dedicated disposable
+database. The suite applies the Alembic migration before testing and downgrades it afterward:
+
+```powershell
+$env:TEST_DATABASE_URL = "postgresql+asyncpg://geolens:geolens_dev_password@localhost:5432/geolens_test"
+backend\.venv\Scripts\python -m pytest backend\tests\integration
+```

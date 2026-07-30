@@ -2,9 +2,9 @@
 
 ## Status and scope
 
-This document describes the project foundation. The repository does not yet contain provider
-integrations, prompt execution, citation extraction, metric computation, authentication, or
-other business workflows.
+This document describes the project foundation and project-management persistence layer. The
+repository does not yet contain provider integrations, prompt execution, citation extraction,
+metric computation, authentication, or other business workflows.
 
 ## System context
 
@@ -12,12 +12,12 @@ other business workflows.
 flowchart LR
     User[User] --> Web[Next.js frontend]
     Web --> API[FastAPI backend]
-    API -. future persistence .-> DB[(PostgreSQL)]
+    API --> DB[(PostgreSQL)]
     API -. future cache and jobs .-> Cache[(Redis)]
 ```
 
-The dashed connections represent infrastructure boundaries that are configured locally but
-are not used by application code yet.
+The dashed Redis connection represents infrastructure configured locally but not used by
+application code yet.
 
 ## Components
 
@@ -29,19 +29,24 @@ behavior. `NEXT_PUBLIC_API_URL` is the public backend base URL.
 
 ### Backend
 
-The FastAPI application owns the HTTP API boundary. It currently exposes only:
+The FastAPI application owns the HTTP API boundary. It exposes:
 
 - `GET /health` for process health
+- `GET /ready` for PostgreSQL readiness
+- `POST /projects` to create a project aggregate
+- `GET /projects/{project_id}` to retrieve a project
+- `GET /projects` to list projects
 - FastAPI's generated OpenAPI schema and documentation
 
-The package uses a `src` layout so imports resolve from the installed application rather than
-the repository working directory. Domain modules and routers should be introduced only when a
-concrete use case needs them.
+Routes validate and serialize HTTP data, services coordinate use cases and transactions, and
+repositories own SQLAlchemy queries. The package uses a `src` layout so imports resolve from
+the installed application rather than the repository working directory.
 
 ### PostgreSQL
 
-PostgreSQL is reserved for durable relational data. No schema, migration tool, or database
-client is selected yet because there is no persistence requirement to model.
+PostgreSQL stores projects, their primary sites and competitors, plus crawl-job and
+analysis-run lifecycle records. SQLAlchemy provides asynchronous sessions through `asyncpg`;
+Alembic owns schema migrations. Primary keys are UUIDs and all timestamps are timezone-aware.
 
 ### Redis
 
@@ -54,8 +59,9 @@ Docker Compose supplies one container for each component and health checks for P
 Redis, and the backend. The frontend waits for the backend's process health; the backend waits
 for its future infrastructure dependencies to accept connections.
 
-The `/health` response means only that the API process can serve HTTP. It intentionally does
-not report PostgreSQL or Redis readiness until application code actually depends on them.
+The `/health` response means only that the API process can serve HTTP. `/ready` executes a
+database query and returns HTTP 503 while PostgreSQL is unavailable. Redis is not part of
+readiness because no application workflow depends on it yet.
 
 ## Configuration
 
@@ -82,7 +88,6 @@ not depend on FastAPI, Next.js, a model provider, PostgreSQL, or Redis.
 The following choices require business requirements and are intentionally open:
 
 - authentication, authorization, and tenant isolation
-- database schema and migration tooling
 - background task and scheduling framework
 - AI/search provider contracts
 - observability and deployment platform
