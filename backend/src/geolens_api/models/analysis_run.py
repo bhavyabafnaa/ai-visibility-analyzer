@@ -10,6 +10,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from geolens_api.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
+    from geolens_api.models.analysis_response import AnalysisResponse
+    from geolens_api.models.analysis_score import AnalysisScore
     from geolens_api.models.crawl_job import CrawlJob
     from geolens_api.models.project import Project
 
@@ -18,6 +20,7 @@ class AnalysisRunStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
     FAILED = "failed"
 
 
@@ -50,3 +53,11 @@ class AnalysisRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     project: Mapped["Project"] = relationship(back_populates="analysis_runs")
     crawl_job: Mapped["CrawlJob | None"] = relationship(back_populates="analysis_runs")
+    responses: Mapped[list["AnalysisResponse"]] = relationship(
+        back_populates="analysis_run",
+        cascade="all, delete-orphan",
+    )
+    scores: Mapped[list["AnalysisScore"]] = relationship(
+        back_populates="analysis_run",
+        cascade="all, delete-orphan",
+    )

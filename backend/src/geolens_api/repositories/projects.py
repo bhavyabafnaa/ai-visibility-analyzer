@@ -15,11 +15,15 @@ class ProjectRepository:
         self._session = session
 
     async def create(self, data: ProjectCreate) -> Project:
-        project = Project(name=data.name)
+        project = Project(name=data.name, aliases=data.aliases)
         if data.site is not None:
             project.site = Site(url=str(data.site.url))
         project.competitors = [
-            Competitor(name=competitor.name, url=str(competitor.url))
+            Competitor(
+                name=competitor.name,
+                url=str(competitor.url),
+                aliases=competitor.aliases,
+            )
             for competitor in data.competitors
         ]
         self._session.add(project)

@@ -79,6 +79,30 @@ provider without its corresponding `OPENAI_API_KEY`, `GEMINI_API_KEY`, or
 `PERPLEXITY_API_KEY` is reported as disabled and is never replaced by another provider.
 Provider model identifiers and request resilience limits are configured in `.env.example`.
 
+To persist deterministic metrics and claim-support analysis, include a project. A crawl and
+model classifier are explicit:
+
+```json
+{
+  "project_id": "00000000-0000-0000-0000-000000000000",
+  "crawl_job_id": "00000000-0000-0000-0000-000000000000",
+  "providers": ["openai"],
+  "prompts": ["Compare Acme with its alternatives."],
+  "claim_classifier_provider": "openai"
+}
+```
+
+Persisted results are available from:
+
+- `GET /analyses/{analysis_id}/citations`
+- `GET /analyses/{analysis_id}/entities`
+- `GET /analyses/{analysis_id}/scores`
+- `GET /analyses/{analysis_id}/claims`
+
+The claim-support risk score is a disclosed model-assisted estimate, not objective truth. Exact
+normalization, metric, evidence, and risk formulas are documented in
+[docs/metrics.md](docs/metrics.md).
+
 Stop the stack without removing persistent data:
 
 ```sh

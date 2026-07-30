@@ -10,7 +10,11 @@ from geolens_api.schemas.project import (
 from geolens_api.schemas.system import HealthResponse, ReadinessResponse
 
 __all__ = [
+    "AnalysisCitationResponse",
+    "AnalysisClaimResponse",
+    "AnalysisEntityResponse",
     "AnalysisRunResponse",
+    "AnalysisScoreResponse",
     "AnalysisStartRequest",
     "AnalysisStartResponse",
     "AnalysisStatus",
@@ -27,6 +31,10 @@ __all__ = [
     "SiteResponse",
 ]
 from geolens_api.schemas.analysis import (
+    AnalysisCitationResponse,
+    AnalysisClaimResponse,
+    AnalysisEntityResponse,
+    AnalysisScoreResponse,
     AnalysisStartRequest,
     AnalysisStartResponse,
     AnalysisStatus,

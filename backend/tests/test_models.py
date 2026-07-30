@@ -1,7 +1,13 @@
 from sqlalchemy import DateTime, Uuid
 
 from geolens_api.models import (
+    AnalysisCitation,
+    AnalysisClaim,
+    AnalysisEntity,
+    AnalysisResponse,
     AnalysisRun,
+    AnalysisScore,
+    ClaimEvidence,
     Competitor,
     CrawlError,
     CrawlJob,
@@ -12,7 +18,21 @@ from geolens_api.models import (
 
 
 def test_all_models_use_uuid_primary_keys() -> None:
-    for model in (Project, Site, Competitor, CrawlJob, CrawlPage, CrawlError, AnalysisRun):
+    for model in (
+        Project,
+        Site,
+        Competitor,
+        CrawlJob,
+        CrawlPage,
+        CrawlError,
+        AnalysisRun,
+        AnalysisResponse,
+        AnalysisCitation,
+        AnalysisEntity,
+        AnalysisScore,
+        AnalysisClaim,
+        ClaimEvidence,
+    ):
         primary_key = model.__table__.c.id
 
         assert primary_key.primary_key
@@ -23,7 +43,21 @@ def test_all_models_use_uuid_primary_keys() -> None:
 
 
 def test_all_timestamps_are_timezone_aware() -> None:
-    for model in (Project, Site, Competitor, CrawlJob, CrawlPage, CrawlError, AnalysisRun):
+    for model in (
+        Project,
+        Site,
+        Competitor,
+        CrawlJob,
+        CrawlPage,
+        CrawlError,
+        AnalysisRun,
+        AnalysisResponse,
+        AnalysisCitation,
+        AnalysisEntity,
+        AnalysisScore,
+        AnalysisClaim,
+        ClaimEvidence,
+    ):
         for column_name in ("created_at", "updated_at"):
             timestamp = model.__table__.c[column_name]
 

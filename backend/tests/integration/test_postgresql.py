@@ -71,6 +71,12 @@ async def test_initial_migration_creates_expected_postgresql_schema() -> None:
     assert {
         "alembic_version",
         "analysis_runs",
+        "analysis_responses",
+        "analysis_citations",
+        "analysis_entities",
+        "analysis_scores",
+        "analysis_claims",
+        "claim_evidence",
         "competitors",
         "crawl_errors",
         "crawl_jobs",

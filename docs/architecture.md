@@ -41,6 +41,10 @@ The FastAPI application owns the HTTP API boundary. It exposes:
 - `GET /crawls/{crawl_id}` to read crawl status and result counts
 - `GET /providers` to report enabled and disabled backend providers
 - `POST /analyses` to execute selected providers against selected prompts
+- `GET /analyses/{analysis_id}/citations` for persisted normalized citations
+- `GET /analyses/{analysis_id}/entities` for mention and entity extraction results
+- `GET /analyses/{analysis_id}/scores` for deterministic metrics and disclosed claim risk
+- `GET /analyses/{analysis_id}/claims` for claim assessments and evidence references
 - FastAPI's generated OpenAPI schema and documentation
 
 Routes validate and serialize HTTP data, services coordinate use cases and transactions, and
@@ -65,10 +69,29 @@ returns a disabled result; the registry never routes the request to another prov
 analysis endpoint runs the provider/prompt matrix concurrently and returns results in stable
 provider-then-prompt order.
 
+Supplying `project_id` persists the provider responses and runs deterministic analysis.
+Supplying `crawl_job_id` adds the selected crawl's page text to the evidence set. Supplying
+`claim_classifier_provider` explicitly enables model-assisted claim classification; there is no
+implicit classifier call.
+
+### Analysis boundaries
+
+The framework-independent `geolens_api.analysis` package owns alias matching, normalized
+citation domains, mention position, entity extraction, evidence retrieval, deterministic metric
+formulas, and deterministic aggregation of claim labels. It does not import FastAPI,
+SQLAlchemy, Redis, or provider adapters.
+
+The claim-classifier protocol is the boundary between those deterministic rules and model
+judgment. A provider adapter classifies only a segmented claim against retrieved evidence.
+Persistence stores the classifier/provider identity, confidence, explanation, and evidence
+references. Aggregate claim risk is explicitly disclosed as a model-assisted estimate and
+never as objective truth.
+
 ### PostgreSQL
 
 PostgreSQL stores projects, their primary sites and competitors, crawl-job and analysis-run
-lifecycle records, extracted crawl pages, and per-URL crawl errors. SQLAlchemy provides
+lifecycle records, provider responses, normalized citations, entity mentions, scores, claims,
+claim evidence, extracted crawl pages, and per-URL crawl errors. SQLAlchemy provides
 asynchronous sessions through `asyncpg`; Alembic owns schema migrations. Primary keys are
 UUIDs and all timestamps are timezone-aware.
 
@@ -134,4 +157,4 @@ The following choices require business requirements and are intentionally open:
 - authentication, authorization, and tenant isolation
 - observability and deployment platform
 - API versioning and generated client strategy
-- metric materialization and aggregation windows
+- aggregation windows beyond a single persisted analysis run
