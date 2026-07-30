@@ -1,0 +1,26 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+backend/.venv/
+
+# Node and Next.js
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
