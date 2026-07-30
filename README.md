@@ -1,11 +1,8 @@
 # GeoLens
 
-GeoLens is an AI visibility and citation intelligence platform. This repository currently
-contains only the project foundation: a FastAPI service, a Next.js application, local
-PostgreSQL and Redis infrastructure, and shared development commands.
-
-No provider integrations, API keys, collection workflows, or business features are included
-at this stage.
+GeoLens is an AI visibility and citation intelligence platform. The repository contains a
+FastAPI service, a Next.js application, PostgreSQL persistence, a Redis-backed Celery worker,
+and a bounded website crawler. No AI-provider integrations or API keys are included.
 
 ## Repository layout
 
@@ -41,7 +38,7 @@ On macOS or Linux:
 cp .env.example .env
 ```
 
-Build and start all four services:
+Build and start all five services:
 
 ```sh
 docker compose up --build
@@ -62,6 +59,9 @@ The services are then available at:
 - OpenAPI documentation: <http://localhost:8000/docs>
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
+
+Create a crawl with `POST /sites/{site_id}/crawls`; poll
+`GET /crawls/{crawl_id}` for status and persisted page/error counts.
 
 Stop the stack without removing persistent data:
 
@@ -85,6 +85,7 @@ PowerShell:
 py -3.10 -m venv backend/.venv
 backend\.venv\Scripts\python -m pip install -e "backend[dev]"
 backend\.venv\Scripts\python -m uvicorn geolens_api.main:app --app-dir backend/src --reload
+backend\.venv\Scripts\celery -A geolens_api.celery_app:celery_app worker --loglevel=INFO
 ```
 
 macOS or Linux:
@@ -93,6 +94,7 @@ macOS or Linux:
 python3 -m venv backend/.venv
 backend/.venv/bin/python -m pip install -e "backend[dev]"
 backend/.venv/bin/python -m uvicorn geolens_api.main:app --app-dir backend/src --reload
+backend/.venv/bin/celery -A geolens_api.celery_app:celery_app worker --loglevel=INFO
 ```
 
 ### Frontend

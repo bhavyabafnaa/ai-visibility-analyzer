@@ -36,6 +36,15 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://geolens:geolens_dev_password@postgres:5432/geolens}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      GEOLENS_CRAWLER_PAGE_LIMIT: ${GEOLENS_CRAWLER_PAGE_LIMIT:-100}
+      GEOLENS_CRAWLER_MAX_DEPTH: ${GEOLENS_CRAWLER_MAX_DEPTH:-3}
+      GEOLENS_CRAWLER_MAX_RESPONSE_BYTES: ${GEOLENS_CRAWLER_MAX_RESPONSE_BYTES:-2000000}
+      GEOLENS_CRAWLER_TIMEOUT_SECONDS: ${GEOLENS_CRAWLER_TIMEOUT_SECONDS:-10}
+      GEOLENS_CRAWLER_CONCURRENCY: ${GEOLENS_CRAWLER_CONCURRENCY:-5}
+      GEOLENS_CRAWLER_MAX_REDIRECTS: ${GEOLENS_CRAWLER_MAX_REDIRECTS:-5}
+      GEOLENS_CRAWLER_SITEMAP_LIMIT: ${GEOLENS_CRAWLER_SITEMAP_LIMIT:-20}
+      GEOLENS_CRAWLER_RENDERER_MIN_TEXT_CHARACTERS: ${GEOLENS_CRAWLER_RENDERER_MIN_TEXT_CHARACTERS:-80}
+      GEOLENS_CRAWLER_USER_AGENT: ${GEOLENS_CRAWLER_USER_AGENT:-GeoLensBot/0.1}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:
@@ -55,6 +64,35 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+
+  worker:
+    build:
+      context: ./backend
+    command:
+      [
+        "celery",
+        "-A",
+        "geolens_api.celery_app:celery_app",
+        "worker",
+        "--loglevel=INFO",
+      ]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://geolens:geolens_dev_password@postgres:5432/geolens}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      GEOLENS_CRAWLER_PAGE_LIMIT: ${GEOLENS_CRAWLER_PAGE_LIMIT:-100}
+      GEOLENS_CRAWLER_MAX_DEPTH: ${GEOLENS_CRAWLER_MAX_DEPTH:-3}
+      GEOLENS_CRAWLER_MAX_RESPONSE_BYTES: ${GEOLENS_CRAWLER_MAX_RESPONSE_BYTES:-2000000}
+      GEOLENS_CRAWLER_TIMEOUT_SECONDS: ${GEOLENS_CRAWLER_TIMEOUT_SECONDS:-10}
+      GEOLENS_CRAWLER_CONCURRENCY: ${GEOLENS_CRAWLER_CONCURRENCY:-5}
+      GEOLENS_CRAWLER_MAX_REDIRECTS: ${GEOLENS_CRAWLER_MAX_REDIRECTS:-5}
+      GEOLENS_CRAWLER_SITEMAP_LIMIT: ${GEOLENS_CRAWLER_SITEMAP_LIMIT:-20}
+      GEOLENS_CRAWLER_RENDERER_MIN_TEXT_CHARACTERS: ${GEOLENS_CRAWLER_RENDERER_MIN_TEXT_CHARACTERS:-80}
+      GEOLENS_CRAWLER_USER_AGENT: ${GEOLENS_CRAWLER_USER_AGENT:-GeoLensBot/0.1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   frontend:
     build:

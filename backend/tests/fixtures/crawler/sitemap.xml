@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://fixture.test/oversized.html</loc></url>
+  <url><loc>https://fixture.test/private.html</loc></url>
+  <url><loc>https://fixture.test/malformed.html</loc></url>
+  <url><loc>https://fixture.test/loop-a</loc></url>
+  <url><loc>https://fixture.test/canonical-b.html</loc></url>
+  <url><loc>https://fixture.test/canonical-a.html</loc></url>
+  <url><loc>https://outside.example/off-domain-sitemap-entry</loc></url>
+</urlset>

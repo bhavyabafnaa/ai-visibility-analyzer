@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Fixture home</title>
+    <meta name="description" content="A deterministic local crawler fixture.">
+    <link rel="canonical" href="/">
+    <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"WebSite","name":"Fixture Site"}
+    </script>
+  </head>
+  <body>
+    <header>Header content should not be main text.</header>
+    <nav><a href="/ignored-navigation.html">Navigation</a></nav>
+    <main>
+      <h1>Fixture heading</h1>
+      <h2>Details</h2>
+      <p>This is the main fixture text.</p>
+      <a href="/about.html#team">About</a>
+      <a href="/canonical-a.html">Canonical alias A</a>
+      <a href="/canonical-b.html">Canonical alias B</a>
+      <a href="/private.html">Robots-excluded page</a>
+      <a href="/malformed.html">Malformed document</a>
+      <a href="/loop-a">Redirect loop</a>
+      <a href="/oversized.html">Oversized response</a>
+      <a href="https://outside.example/not-allowed">Off-domain link</a>
+      <a href="mailto:test@example.com">Email</a>
+    </main>
+    <footer>Footer content should not be main text.</footer>
+  </body>
+</html>

@@ -5,7 +5,7 @@ from fastapi import FastAPI
 
 from geolens_api.config import get_settings
 from geolens_api.database import engine
-from geolens_api.routers import projects_router, system_router
+from geolens_api.routers import crawls_router, projects_router, system_router
 
 
 @asynccontextmanager
@@ -25,6 +25,7 @@ def create_app() -> FastAPI:
     )
     application.include_router(system_router)
     application.include_router(projects_router)
+    application.include_router(crawls_router)
     return application
 
 
