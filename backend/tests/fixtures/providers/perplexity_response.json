@@ -1,0 +1,33 @@
+{
+  "id": "pplx_fixture",
+  "model": "sonar-fixture",
+  "object": "chat.completion",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "GeoLens measures AI visibility.[1]"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 9,
+    "completion_tokens": 8,
+    "total_tokens": 17,
+    "reasoning_tokens": 2
+  },
+  "citations": [
+    "https://example.com/perplexity-source",
+    "https://example.com/citation-only"
+  ],
+  "search_results": [
+    {
+      "title": "Perplexity fixture source",
+      "url": "https://example.com/perplexity-source",
+      "date": "2026-07-30",
+      "snippet": "A source used by the deterministic fixture."
+    }
+  ]
+}

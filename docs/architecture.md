@@ -2,9 +2,9 @@
 
 ## Status and scope
 
-This document describes the project foundation, project persistence, and secure crawl
-pipeline. The repository does not yet contain provider integrations, prompt execution,
-citation extraction, metric computation, or authentication.
+This document describes the project foundation, project persistence, secure crawl pipeline,
+and provider-neutral prompt execution. Metric computation and authentication are not yet
+implemented.
 
 ## System context
 
@@ -14,6 +14,7 @@ flowchart LR
     Web --> API[FastAPI backend]
     API --> DB[(PostgreSQL)]
     API --> Queue[(Redis)]
+    API --> Providers[AI and search providers]
     Queue --> Worker[Celery worker]
     Worker --> DB
     Worker --> Site[Configured website]
@@ -38,11 +39,31 @@ The FastAPI application owns the HTTP API boundary. It exposes:
 - `GET /projects` to list projects
 - `POST /sites/{site_id}/crawls` to validate a site and queue a crawl
 - `GET /crawls/{crawl_id}` to read crawl status and result counts
+- `GET /providers` to report enabled and disabled backend providers
+- `POST /analyses` to execute selected providers against selected prompts
 - FastAPI's generated OpenAPI schema and documentation
 
 Routes validate and serialize HTTP data, services coordinate use cases and transactions, and
 repositories own SQLAlchemy queries. The package uses a `src` layout so imports resolve from
 the installed application rather than the repository working directory.
+
+### Provider adapters
+
+Provider clients are created during the backend application lifespan and never exposed to the
+frontend. A neutral contract carries provider and model identifiers, response text, normalized
+citations, raw JSON, token usage, latency, status, and structured errors. Analysis orchestration
+depends only on that contract.
+
+`MockProvider` supplies deterministic recorded and synthetic results. OpenAI uses the Responses
+API with hosted web search, Gemini uses the Interactions API with Google Search, and Perplexity
+uses Sonar. Each adapter owns its request and citation parsing at the infrastructure edge. Shared
+HTTP behavior enforces timeouts, bounded retries, exponential backoff, `Retry-After` handling,
+and explicit terminal rate-limit errors.
+
+Missing credentials install a disabled placeholder under that provider's own name. Selecting it
+returns a disabled result; the registry never routes the request to another provider. The
+analysis endpoint runs the provider/prompt matrix concurrently and returns results in stable
+provider-then-prompt order.
 
 ### PostgreSQL
 
@@ -82,7 +103,9 @@ crawl creation is surfaced as HTTP 503 and persisted on the crawl job.
 
 Configuration is passed through environment variables. `.env.example` contains local,
 non-sensitive defaults and may be copied to `.env`. Real secrets must never be committed.
-Provider-specific keys are outside the current scope.
+Provider model names, API keys, request timeouts, retry limits, and backoff caps are configured
+through environment variables. Empty provider keys disable their provider. Secrets have no
+checked-in values.
 
 ## Dependency direction
 
@@ -109,7 +132,6 @@ redirect count, sitemap count, renderer fallback threshold, and user agent.
 The following choices require business requirements and are intentionally open:
 
 - authentication, authorization, and tenant isolation
-- AI/search provider contracts
 - observability and deployment platform
 - API versioning and generated client strategy
 - metric materialization and aggregation windows

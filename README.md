@@ -2,7 +2,8 @@
 
 GeoLens is an AI visibility and citation intelligence platform. The repository contains a
 FastAPI service, a Next.js application, PostgreSQL persistence, a Redis-backed Celery worker,
-and a bounded website crawler. No AI-provider integrations or API keys are included.
+and a bounded website crawler. Backend-only adapters support deterministic mock, OpenAI,
+Gemini, and Perplexity prompt execution through one provider-neutral response contract.
 
 ## Repository layout
 
@@ -56,12 +57,27 @@ The services are then available at:
 - Backend API: <http://localhost:8000>
 - Backend health: <http://localhost:8000/health>
 - Backend readiness: <http://localhost:8000/ready>
+- Configured provider status: <http://localhost:8000/providers>
 - OpenAPI documentation: <http://localhost:8000/docs>
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
 
 Create a crawl with `POST /sites/{site_id}/crawls`; poll
 `GET /crawls/{crawl_id}` for status and persisted page/error counts.
+
+Start a provider analysis with `POST /analyses`:
+
+```json
+{
+  "providers": ["mock", "openai"],
+  "prompts": ["What sources describe Acme's product category?"]
+}
+```
+
+The endpoint returns one normalized result for every selected provider and prompt. A live
+provider without its corresponding `OPENAI_API_KEY`, `GEMINI_API_KEY`, or
+`PERPLEXITY_API_KEY` is reported as disabled and is never replaced by another provider.
+Provider model identifiers and request resilience limits are configured in `.env.example`.
 
 Stop the stack without removing persistent data:
 
@@ -163,4 +179,12 @@ database. The suite applies the Alembic migration before testing and downgrades 
 ```powershell
 $env:TEST_DATABASE_URL = "postgresql+asyncpg://geolens:geolens_dev_password@localhost:5432/geolens_test"
 backend\.venv\Scripts\python -m pytest backend\tests\integration
+```
+
+Live provider contract tests are opt-in, never run in CI, and require both credentials and an
+explicit local flag:
+
+```powershell
+$env:GEOLENS_RUN_LIVE_PROVIDER_TESTS = "1"
+backend\.venv\Scripts\python -m pytest backend\tests\live
 ```

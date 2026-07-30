@@ -1,0 +1,40 @@
+{
+  "modelVersion": "gemini-legacy-fixture",
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "GeoLens measures AI visibility."
+          }
+        ],
+        "role": "model"
+      },
+      "groundingMetadata": {
+        "groundingChunks": [
+          {
+            "web": {
+              "uri": "https://example.com/gemini-legacy-source",
+              "title": "Gemini legacy fixture source"
+            }
+          }
+        ],
+        "groundingSupports": [
+          {
+            "segment": {
+              "startIndex": 0,
+              "endIndex": 14,
+              "text": "GeoLens measur"
+            },
+            "groundingChunkIndices": [0]
+          }
+        ]
+      }
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 11,
+    "candidatesTokenCount": 6,
+    "totalTokenCount": 17
+  }
+}

@@ -1,7 +1,15 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AliasChoices, AnyUrl, Field, RedisDsn, field_validator
+from pydantic import (
+    AliasChoices,
+    AnyHttpUrl,
+    AnyUrl,
+    Field,
+    RedisDsn,
+    SecretStr,
+    field_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,6 +44,57 @@ class Settings(BaseSettings):
     crawler_sitemap_limit: int = Field(default=20, ge=1, le=100)
     crawler_renderer_min_text_characters: int = Field(default=80, ge=0, le=10_000)
     crawler_user_agent: str = Field(default="GeoLensBot/0.1", min_length=1, max_length=200)
+    mock_model: str = Field(
+        default="mock-v1",
+        min_length=1,
+        validation_alias=AliasChoices("GEOLENS_MOCK_MODEL", "MOCK_MODEL"),
+    )
+    openai_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENAI_API_KEY", "GEOLENS_OPENAI_API_KEY"),
+    )
+    openai_model: str = Field(
+        default="gpt-5.6",
+        min_length=1,
+        validation_alias=AliasChoices("OPENAI_MODEL", "GEOLENS_OPENAI_MODEL"),
+    )
+    openai_base_url: AnyHttpUrl = Field(
+        default=AnyHttpUrl("https://api.openai.com/v1"),
+        validation_alias=AliasChoices("OPENAI_BASE_URL", "GEOLENS_OPENAI_BASE_URL"),
+    )
+    gemini_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GEMINI_API_KEY", "GEOLENS_GEMINI_API_KEY"),
+    )
+    gemini_model: str = Field(
+        default="gemini-3.6-flash",
+        min_length=1,
+        validation_alias=AliasChoices("GEMINI_MODEL", "GEOLENS_GEMINI_MODEL"),
+    )
+    gemini_base_url: AnyHttpUrl = Field(
+        default=AnyHttpUrl("https://generativelanguage.googleapis.com/v1beta"),
+        validation_alias=AliasChoices("GEMINI_BASE_URL", "GEOLENS_GEMINI_BASE_URL"),
+    )
+    perplexity_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("PERPLEXITY_API_KEY", "GEOLENS_PERPLEXITY_API_KEY"),
+    )
+    perplexity_model: str = Field(
+        default="sonar",
+        min_length=1,
+        validation_alias=AliasChoices("PERPLEXITY_MODEL", "GEOLENS_PERPLEXITY_MODEL"),
+    )
+    perplexity_base_url: AnyHttpUrl = Field(
+        default=AnyHttpUrl("https://api.perplexity.ai"),
+        validation_alias=AliasChoices(
+            "PERPLEXITY_BASE_URL",
+            "GEOLENS_PERPLEXITY_BASE_URL",
+        ),
+    )
+    provider_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
+    provider_max_retries: int = Field(default=2, ge=0, le=10)
+    provider_retry_backoff_seconds: float = Field(default=0.5, ge=0, le=60)
+    provider_max_retry_after_seconds: float = Field(default=30.0, ge=0, le=300)
 
     @field_validator("database_url", mode="before")
     @classmethod
