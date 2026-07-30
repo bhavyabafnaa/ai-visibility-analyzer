@@ -119,10 +119,8 @@ services:
   frontend:
     build:
       context: ./frontend
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      GEOLENS_API_URL: ${GEOLENS_API_URL:-http://backend:8000}
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     depends_on:

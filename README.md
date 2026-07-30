@@ -51,6 +51,16 @@ Apply database migrations:
 make migrate
 ```
 
+Seed the idempotent Acme Cloud demo project:
+
+```sh
+make seed
+```
+
+The dashboard is also pre-filled with this configuration when the database is empty. Its default
+prompt set has deterministic `MockProvider` fixtures with measurable citation, entity, and claim
+evidence gaps, so the local recommendation workflow requires no provider credential.
+
 The services are then available at:
 
 - Frontend: <http://localhost:3000>
@@ -144,8 +154,9 @@ npm --prefix frontend ci
 npm --prefix frontend run dev
 ```
 
-The frontend reads `NEXT_PUBLIC_API_URL` at build time. It defaults to
-`http://localhost:8000`.
+The browser uses a same-origin `/api/geolens` route. The Next.js server reads the server-only
+`GEOLENS_API_URL` variable and defaults to `http://localhost:8000` for local development. Provider
+credentials are never included in frontend environment variables or sent to the browser.
 
 ## Development commands
 
@@ -154,6 +165,7 @@ If GNU Make is available:
 ```sh
 make setup
 make migrate
+make seed
 make lint
 make typecheck
 make test

@@ -9,7 +9,7 @@ NPM ?= npm
 endif
 
 .PHONY: setup setup-backend setup-frontend lint lint-backend lint-frontend \
-	typecheck migrate test test-backend test-integration test-frontend build check infra up down
+	typecheck migrate seed test test-backend test-integration test-frontend build check infra up down
 
 setup: setup-backend setup-frontend
 
@@ -34,6 +34,9 @@ typecheck:
 
 migrate:
 	$(BACKEND_PYTHON) -m alembic -c backend/alembic.ini upgrade head
+
+seed:
+	$(BACKEND_PYTHON) -m geolens_api.seed
 
 test: test-backend test-frontend
 

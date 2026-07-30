@@ -2,6 +2,7 @@ from hashlib import sha256
 
 from pydantic import BaseModel, Field
 
+from geolens_api.demo import DEMO_PROMPTS
 from geolens_api.providers.contract import (
     Citation,
     ProviderResponse,
@@ -42,7 +43,96 @@ DEFAULT_MOCK_FIXTURES: dict[str, MockFixture] = {
             ),
         },
         latency_ms=1.0,
-    )
+    ),
+    DEMO_PROMPTS[0]: MockFixture(
+        response_text=(
+            "Northstar AI and Summit Search lead many B2B shortlists. "
+            "Acme Cloud offers prompt-level monitoring and source attribution, "
+            "but appears less often in independent roundups."
+        ),
+        citations=[
+            Citation(
+                url="https://northstar.example/resources/ai-visibility-guide",
+                title="AI visibility platform guide",
+                cited_text="Northstar AI and Summit Search lead many B2B shortlists.",
+            ),
+            Citation(
+                url="https://www.g2.com/categories/ai-search-monitoring",
+                title="AI search monitoring category",
+                cited_text="B2B teams compare monitoring coverage and source attribution.",
+            ),
+        ],
+        token_usage=TokenUsage(input_tokens=11, output_tokens=27, total_tokens=38),
+        raw_response={"fixture": "demo-b2b-shortlist"},
+        latency_ms=18.0,
+    ),
+    DEMO_PROMPTS[1]: MockFixture(
+        response_text=(
+            "Northstar AI is frequently cited for broad monitoring. "
+            "Acme Cloud provides query-level citation tracking and entity analysis. "
+            "Teams should validate historical coverage before selecting either platform."
+        ),
+        citations=[
+            Citation(
+                url="https://northstar.example/platform",
+                title="Northstar platform",
+                cited_text="Northstar AI provides broad monitoring.",
+            ),
+            Citation(
+                url="https://acme.example/product/citation-monitoring",
+                title="Acme Cloud citation monitoring",
+                cited_text="Acme Cloud provides query-level citation tracking and entity analysis.",
+            ),
+        ],
+        token_usage=TokenUsage(input_tokens=10, output_tokens=27, total_tokens=37),
+        raw_response={"fixture": "demo-vendor-comparison"},
+        latency_ms=22.0,
+    ),
+    DEMO_PROMPTS[2]: MockFixture(
+        response_text=(
+            "Northstar AI and Summit Search help marketing teams track brand mentions "
+            "across AI answers. Northstar AI also reports the source domains used by providers."
+        ),
+        citations=[
+            Citation(
+                url="https://searchengineland.com/ai-visibility-tools",
+                title="AI visibility tools",
+                cited_text="Marketing teams can track brand mentions across AI answers.",
+            ),
+            Citation(
+                url="https://northstar.example/brand-monitoring",
+                title="Northstar brand monitoring",
+                cited_text="Northstar AI reports the source domains used by providers.",
+            ),
+        ],
+        token_usage=TokenUsage(input_tokens=12, output_tokens=24, total_tokens=36),
+        raw_response={"fixture": "demo-brand-monitoring"},
+        latency_ms=16.0,
+    ),
+    DEMO_PROMPTS[3]: MockFixture(
+        response_text=(
+            "An enterprise platform should provide provider coverage, query-level history, "
+            "citation evidence, entity tracking, and claim review. "
+            "Acme Cloud supports citation evidence and entity tracking."
+        ),
+        citations=[
+            Citation(
+                url="https://acme.example/enterprise/trust",
+                title="Acme Cloud enterprise trust center",
+                cited_text="Acme Cloud supports citation evidence and entity tracking.",
+            ),
+            Citation(
+                url="https://www.forrester.com/report/generative-search-analytics",
+                title="Generative search analytics evaluation",
+                cited_text=(
+                    "Enterprise evaluation includes provider coverage and query-level history."
+                ),
+            ),
+        ],
+        token_usage=TokenUsage(input_tokens=14, output_tokens=25, total_tokens=39),
+        raw_response={"fixture": "demo-enterprise-evaluation"},
+        latency_ms=20.0,
+    ),
 }
 
 

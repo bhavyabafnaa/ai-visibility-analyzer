@@ -4,8 +4,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "GeoLens",
-  description: "AI visibility and citation intelligence.",
+  title: "GeoLens · AI Visibility Intelligence",
+  description: "Evidence-led AI visibility, citation, entity, and claim intelligence.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
