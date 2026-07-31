@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from geolens_api.crawler.urls import PublicUrlValidator
 from geolens_api.database import get_session
 from geolens_api.main import app
+from geolens_api.models import CrawlJob, CrawlJobStatus
 from geolens_api.queues import get_crawl_queue
 from geolens_api.routers.crawls import get_url_validator
 from tests.fixture_site import StaticResolver
@@ -74,6 +76,54 @@ async def test_create_crawl_queues_job_and_status_endpoint_returns_it(
     status_response = await client.get(f"/crawls/{crawl_id}")
     assert status_response.status_code == 200
     assert status_response.json() == payload
+
+
+async def test_get_latest_crawl_returns_newest_job_for_requested_site_only(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    first_site_id = await create_site(client)
+    second_site_id = await create_site(client, "https://other.fixture.test")
+    first = await client.post(f"/sites/{first_site_id}/crawls")
+    other_site = await client.post(f"/sites/{second_site_id}/crawls")
+    assert first.status_code == other_site.status_code == 202
+
+    first_job = await session.get(CrawlJob, UUID(first.json()["id"]))
+    assert first_job is not None
+    first_job.created_at = datetime.now(timezone.utc) - timedelta(days=1)
+    await session.commit()
+
+    newest = await client.post(f"/sites/{first_site_id}/crawls")
+    assert newest.status_code == 202
+    newest_job = await session.get(CrawlJob, UUID(newest.json()["id"]))
+    assert newest_job is not None
+    newest_job.status = CrawlJobStatus.SUCCEEDED
+    newest_job.completed_at = datetime.now(timezone.utc)
+    newest_job.page_count = 7
+    newest_job.error_count = 2
+    await session.commit()
+
+    response = await client.get(f"/sites/{first_site_id}/crawls/latest")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == newest.json()["id"]
+    assert payload["site_id"] == str(first_site_id)
+    assert payload["id"] != other_site.json()["id"]
+    assert payload["status"] == "succeeded"
+    assert payload["page_count"] == 7
+    assert payload["error_count"] == 2
+
+
+async def test_get_latest_crawl_returns_null_when_site_has_no_crawl(
+    client: AsyncClient,
+) -> None:
+    site_id = await create_site(client)
+
+    response = await client.get(f"/sites/{site_id}/crawls/latest")
+
+    assert response.status_code == 200
+    assert response.json() is None
 
 
 async def test_create_crawl_rejects_private_site_address(

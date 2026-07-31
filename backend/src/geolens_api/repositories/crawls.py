@@ -27,11 +27,22 @@ class CrawlRepository:
     async def get_job(self, crawl_id: UUID) -> CrawlJob | None:
         return await self._session.get(CrawlJob, crawl_id)
 
+    async def get_latest_job_for_site(self, site_id: UUID) -> CrawlJob | None:
+        statement = (
+            select(CrawlJob)
+            .where(CrawlJob.site_id == site_id)
+            .order_by(CrawlJob.created_at.desc(), CrawlJob.id.desc())
+            .limit(1)
+        )
+        job: CrawlJob | None = await self._session.scalar(statement)
+        return job
+
     async def get_job_for_execution(self, crawl_id: UUID) -> CrawlJob | None:
         statement = (
             select(CrawlJob).where(CrawlJob.id == crawl_id).options(selectinload(CrawlJob.site))
         )
-        return await self._session.scalar(statement)
+        job: CrawlJob | None = await self._session.scalar(statement)
+        return job
 
     def add_report(self, crawl_id: UUID, report: CrawlReport) -> None:
         for page in report.pages:

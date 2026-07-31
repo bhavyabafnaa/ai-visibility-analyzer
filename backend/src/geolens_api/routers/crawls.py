@@ -60,6 +60,18 @@ async def create_crawl(
     return CrawlJobResponse.model_validate(job)
 
 
+@router.get(
+    "/sites/{site_id}/crawls/latest",
+    response_model=CrawlJobResponse | None,
+)
+async def get_latest_crawl_for_site(
+    site_id: UUID,
+    session: SessionDependency,
+) -> CrawlJobResponse | None:
+    job = await CrawlJobService(session).get_latest_for_site(site_id)
+    return CrawlJobResponse.model_validate(job) if job is not None else None
+
+
 @router.get("/crawls/{crawl_id}", response_model=CrawlJobResponse)
 async def get_crawl(crawl_id: UUID, session: SessionDependency) -> CrawlJobResponse:
     try:
