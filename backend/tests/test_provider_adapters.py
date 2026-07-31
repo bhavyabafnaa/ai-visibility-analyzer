@@ -76,6 +76,7 @@ async def test_openai_adapter_normalizes_responses_fixture() -> None:
     assert result.raw_response == load_fixture("openai_response.json")
     assert request.url.path == "/v1/responses"
     assert json.loads(request.content)["tools"] == [{"type": "web_search"}]
+    assert json.loads(request.content)["store"] is False
 
 
 async def test_gemini_adapter_normalizes_interactions_fixture() -> None:
@@ -96,6 +97,7 @@ async def test_gemini_adapter_normalizes_interactions_fixture() -> None:
     assert result.token_usage.total_tokens == 17
     assert request.url.path == "/v1beta/interactions"
     assert json.loads(request.content)["tools"] == [{"type": "google_search"}]
+    assert json.loads(request.content)["store"] is False
 
 
 async def test_gemini_adapter_accepts_recorded_generate_content_shape() -> None:
@@ -112,6 +114,116 @@ async def test_gemini_adapter_accepts_recorded_generate_content_shape() -> None:
     assert result.citations[0].url == "https://example.com/gemini-legacy-source"
     assert result.citations[0].start_index == 0
     assert result.citations[0].end_index == 14
+
+
+async def test_gemini_adapter_normalizes_current_interactions_usage_fields() -> None:
+    payload = {
+        "model": "gemini-current",
+        "steps": [
+            {
+                "type": "model_output",
+                "content": [{"type": "text", "text": "Current usage.", "annotations": []}],
+            }
+        ],
+        "usage": {
+            "total_input_tokens": 12,
+            "total_output_tokens": 7,
+            "total_tokens": 23,
+            "total_cached_tokens": 3,
+            "total_thought_tokens": 4,
+        },
+    }
+
+    _, result = await execute_fixture(
+        lambda client: GeminiProvider(
+            model_identifier="configured-gemini-model",
+            **provider_kwargs(client),  # type: ignore[arg-type]
+        ),
+        payload,
+    )
+
+    assert result.token_usage.model_dump() == {
+        "input_tokens": 12,
+        "output_tokens": 7,
+        "total_tokens": 23,
+        "cached_tokens": 3,
+        "reasoning_tokens": 4,
+    }
+
+
+@pytest.mark.parametrize(
+    ("factory", "payload"),
+    [
+        (
+            lambda client: OpenAIProvider(
+                model_identifier="openai-multipart",
+                **provider_kwargs(client),  # type: ignore[arg-type]
+            ),
+            {
+                "model": "openai-multipart",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": "First. ", "annotations": []},
+                            {
+                                "type": "output_text",
+                                "text": "Second.",
+                                "annotations": [
+                                    {
+                                        "type": "url_citation",
+                                        "url": "https://example.test/second",
+                                        "start_index": 0,
+                                        "end_index": 6,
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            },
+        ),
+        (
+            lambda client: GeminiProvider(
+                model_identifier="gemini-multipart",
+                **provider_kwargs(client),  # type: ignore[arg-type]
+            ),
+            {
+                "model": "gemini-multipart",
+                "steps": [
+                    {
+                        "type": "model_output",
+                        "content": [
+                            {"type": "text", "text": "First. ", "annotations": []},
+                            {
+                                "type": "text",
+                                "text": "Second.",
+                                "annotations": [
+                                    {
+                                        "type": "url_citation",
+                                        "url": "https://example.test/second",
+                                        "start_index": 0,
+                                        "end_index": 6,
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            },
+        ),
+    ],
+)
+async def test_multipart_adapter_citation_offsets_reference_joined_text(
+    factory: ProviderFactory,
+    payload: dict[str, Any],
+) -> None:
+    _, result = await execute_fixture(factory, payload)
+
+    assert result.response_text == "First. Second."
+    assert result.citations[0].start_index == 7
+    assert result.citations[0].end_index == 13
+    assert result.citations[0].cited_text == "Second"
 
 
 async def test_perplexity_adapter_normalizes_sonar_fixture() -> None:

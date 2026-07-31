@@ -167,6 +167,8 @@ export interface AnalysisClaimResponse {
   explanation: string;
   classifier: string;
   model_identifier: string | null;
+  response_prompt: string;
+  response_provider: string;
   segmentation_rule_version: string;
   evidence: ClaimEvidenceResponse[];
 }

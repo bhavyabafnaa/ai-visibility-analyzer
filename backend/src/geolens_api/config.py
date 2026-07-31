@@ -9,6 +9,7 @@ from pydantic import (
     RedisDsn,
     SecretStr,
     field_validator,
+    model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -108,6 +109,23 @@ class Settings(BaseSettings):
         if url.startswith("postgresql://"):
             return url.replace("postgresql://", "postgresql+asyncpg://", 1)
         return value
+
+    @model_validator(mode="after")
+    def require_secure_production_provider_endpoints(self) -> "Settings":
+        if self.app_environment != "production":
+            return self
+        insecure = [
+            name
+            for name, url in (
+                ("OPENAI_BASE_URL", self.openai_base_url),
+                ("GEMINI_BASE_URL", self.gemini_base_url),
+                ("PERPLEXITY_BASE_URL", self.perplexity_base_url),
+            )
+            if url.scheme != "https"
+        ]
+        if insecure:
+            raise ValueError("production provider base URLs must use HTTPS: " + ", ".join(insecure))
+        return self
 
     @property
     def database_url_string(self) -> str:

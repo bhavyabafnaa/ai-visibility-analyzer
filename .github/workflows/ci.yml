@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend lint, types, and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: geolens_test
+          POSTGRES_USER: geolens
+          POSTGRES_PASSWORD: geolens_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U geolens -d geolens_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://geolens:geolens_test_password@127.0.0.1:5432/geolens_test
+      TEST_DATABASE_URL: postgresql+asyncpg://geolens:geolens_test_password@127.0.0.1:5432/geolens_test
+      GEOLENS_APP_ENVIRONMENT: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install backend
+        run: python -m pip install --upgrade pip && python -m pip install -e "backend[dev]"
+      - name: Ruff lint
+        run: python -m ruff check backend
+      - name: Ruff formatting
+        run: python -m ruff format --check backend
+      - name: Mypy
+        run: python -m mypy backend
+      - name: Backend tests, including PostgreSQL integration
+        run: python -m pytest backend -m "not live"
+
+  frontend:
+    name: Frontend lint, types, tests, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend
+        run: npm --prefix frontend ci
+      - name: ESLint
+        run: npm --prefix frontend run lint
+      - name: TypeScript
+        run: npm --prefix frontend run typecheck
+      - name: Frontend tests
+        run: npm --prefix frontend run test
+      - name: Production build
+        run: npm --prefix frontend run build

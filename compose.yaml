@@ -3,12 +3,13 @@ name: ${COMPOSE_PROJECT_NAME:-geolens}
 services:
   postgres:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-geolens}
       POSTGRES_USER: ${POSTGRES_USER:-geolens}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-geolens_dev_password}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -16,12 +17,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 5s
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${BIND_ADDRESS:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -29,13 +32,21 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 5s
 
-  backend:
+  api:
     build:
       context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://geolens:geolens_dev_password@postgres:5432/geolens}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      GEOLENS_APP_ENVIRONMENT: production
+      RUN_MIGRATIONS: "1"
       GEOLENS_CRAWLER_PAGE_LIMIT: ${GEOLENS_CRAWLER_PAGE_LIMIT:-100}
       GEOLENS_CRAWLER_MAX_DEPTH: ${GEOLENS_CRAWLER_MAX_DEPTH:-3}
       GEOLENS_CRAWLER_MAX_RESPONSE_BYTES: ${GEOLENS_CRAWLER_MAX_RESPONSE_BYTES:-2000000}
@@ -57,7 +68,7 @@ services:
       GEOLENS_PROVIDER_RETRY_BACKOFF_SECONDS: ${GEOLENS_PROVIDER_RETRY_BACKOFF_SECONDS:-0.5}
       GEOLENS_PROVIDER_MAX_RETRY_AFTER_SECONDS: ${GEOLENS_PROVIDER_MAX_RETRY_AFTER_SECONDS:-30}
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,7 +80,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)",
         ]
       interval: 10s
       timeout: 5s
@@ -79,6 +90,11 @@ services:
   worker:
     build:
       context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
     command:
       [
         "celery",
@@ -90,6 +106,8 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://geolens:geolens_dev_password@postgres:5432/geolens}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      GEOLENS_APP_ENVIRONMENT: production
+      RUN_MIGRATIONS: "0"
       GEOLENS_CRAWLER_PAGE_LIMIT: ${GEOLENS_CRAWLER_PAGE_LIMIT:-100}
       GEOLENS_CRAWLER_MAX_DEPTH: ${GEOLENS_CRAWLER_MAX_DEPTH:-3}
       GEOLENS_CRAWLER_MAX_RESPONSE_BYTES: ${GEOLENS_CRAWLER_MAX_RESPONSE_BYTES:-2000000}
@@ -99,33 +117,49 @@ services:
       GEOLENS_CRAWLER_SITEMAP_LIMIT: ${GEOLENS_CRAWLER_SITEMAP_LIMIT:-20}
       GEOLENS_CRAWLER_RENDERER_MIN_TEXT_CHARACTERS: ${GEOLENS_CRAWLER_RENDERER_MIN_TEXT_CHARACTERS:-80}
       GEOLENS_CRAWLER_USER_AGENT: ${GEOLENS_CRAWLER_USER_AGENT:-GeoLensBot/0.1}
-      GEOLENS_MOCK_MODEL: ${GEOLENS_MOCK_MODEL:-mock-v1}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
-      PERPLEXITY_API_KEY: ${PERPLEXITY_API_KEY:-}
-      PERPLEXITY_MODEL: ${PERPLEXITY_MODEL:-sonar}
-      GEOLENS_PROVIDER_TIMEOUT_SECONDS: ${GEOLENS_PROVIDER_TIMEOUT_SECONDS:-30}
-      GEOLENS_PROVIDER_MAX_RETRIES: ${GEOLENS_PROVIDER_MAX_RETRIES:-2}
-      GEOLENS_PROVIDER_RETRY_BACKOFF_SECONDS: ${GEOLENS_PROVIDER_RETRY_BACKOFF_SECONDS:-0.5}
-      GEOLENS_PROVIDER_MAX_RETRY_AFTER_SECONDS: ${GEOLENS_PROVIDER_MAX_RETRY_AFTER_SECONDS:-30}
     depends_on:
-      postgres:
+      api:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A geolens_api.celery_app:celery_app inspect ping --timeout=5 -d celery@$${HOSTNAME}",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   frontend:
     build:
       context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
     environment:
-      GEOLENS_API_URL: ${GEOLENS_API_URL:-http://backend:8000}
+      GEOLENS_API_URL: ${GEOLENS_API_URL:-http://api:8000}
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
     depends_on:
-      backend:
+      api:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   postgres_data:

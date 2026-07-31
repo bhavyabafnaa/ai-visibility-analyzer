@@ -255,7 +255,10 @@ class AnalysisRepository:
             select(AnalysisClaim)
             .join(AnalysisResponse)
             .where(AnalysisResponse.analysis_run_id == analysis_id)
-            .options(selectinload(AnalysisClaim.evidence))
+            .options(
+                selectinload(AnalysisClaim.evidence),
+                selectinload(AnalysisClaim.response),
+            )
             .order_by(AnalysisResponse.ordinal, AnalysisClaim.ordinal)
         )
         return list((await self._session.scalars(statement)).all())

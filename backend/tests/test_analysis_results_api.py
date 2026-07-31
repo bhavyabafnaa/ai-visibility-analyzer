@@ -159,7 +159,37 @@ async def test_persisted_analysis_exposes_citations_entities_scores_and_claims(
     assert len(claims) == 2
     assert all(claim["classification"] == "supported" for claim in claims)
     assert all(claim["evidence"] for claim in claims)
+    assert all(claim["response_prompt"] == "Compare vendors" for claim in claims)
+    assert all(claim["response_provider"] == "mock" for claim in claims)
     assert classifier.call_count == 2
+
+
+async def test_unconfigured_classifier_does_not_report_model_assisted_risk(
+    results_client: tuple[AsyncClient, Project, CrawlJob, SupportingClassifierProvider],
+) -> None:
+    client, project, _, classifier = results_client
+
+    started = await client.post(
+        "/analyses",
+        json={
+            "project_id": str(project.id),
+            "providers": ["mock"],
+            "prompts": ["Compare vendors"],
+        },
+    )
+
+    assert started.status_code == 201
+    analysis_id = started.json()["analysis_id"]
+    scores = (await client.get(f"/analyses/{analysis_id}/scores")).json()
+    claims = (await client.get(f"/analyses/{analysis_id}/claims")).json()
+    risk = next(score for score in scores if score["name"] == "claim_support_risk")
+
+    assert risk["is_defined"] is False
+    assert risk["value"] is None
+    assert risk["denominator"] == 0
+    assert claims
+    assert all(claim["classifier"] == "not_configured" for claim in claims)
+    assert classifier.call_count == 0
 
 
 async def test_analysis_result_endpoints_return_404_for_unknown_run(

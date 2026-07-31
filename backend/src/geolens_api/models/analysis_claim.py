@@ -42,6 +42,14 @@ class AnalysisClaim(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
     )
 
+    @property
+    def response_prompt(self) -> str:
+        return self.response.prompt
+
+    @property
+    def response_provider(self) -> str:
+        return self.response.provider
+
 
 class ClaimEvidence(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "claim_evidence"

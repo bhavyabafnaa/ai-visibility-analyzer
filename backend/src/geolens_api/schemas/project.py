@@ -79,6 +79,8 @@ def _normalize_aliases(values: list[str]) -> list[str]:
     normalized = [value.strip() for value in values]
     if any(not value for value in normalized):
         raise ValueError("aliases cannot be blank")
+    if any(len(value) > 200 for value in normalized):
+        raise ValueError("aliases cannot exceed 200 characters")
     casefolded = [value.casefold() for value in normalized]
     if len(casefolded) != len(set(casefolded)):
         raise ValueError("aliases must be unique")

@@ -116,3 +116,13 @@ async def test_analysis_rejects_duplicate_or_blank_inputs(client: AsyncClient) -
 
     assert duplicate_response.status_code == 422
     assert blank_response.status_code == 422
+
+
+async def test_analysis_rejects_unbounded_prompt_input(client: AsyncClient) -> None:
+    response = await client.post(
+        "/analyses",
+        json={"providers": ["mock"], "prompts": ["x" * 10_001]},
+    )
+
+    assert response.status_code == 422
+    assert "prompts cannot exceed 10000 characters" in response.text

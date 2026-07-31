@@ -81,31 +81,56 @@ export interface DashboardEvidence {
   failedCount: number;
 }
 
-function escaped(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function containsAlias(text: string, aliases: string[]): boolean {
-  return aliases.some((alias) => {
-    const trimmed = alias.trim();
-    if (!trimmed) return false;
-    return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped(trimmed)}([^\\p{L}\\p{N}]|$)`, "iu").test(
-      text,
-    );
-  });
+function normalForm(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}+#&]+/gu, " ")
+    .trim();
 }
 
 function firstAliasIndex(text: string, aliases: string[]): number | null {
-  const normalized = text.toLocaleLowerCase();
+  const normalizedText = ` ${normalForm(text)} `;
   const indexes = aliases
-    .map((alias) => normalized.indexOf(alias.toLocaleLowerCase()))
+    .map(normalForm)
+    .filter(Boolean)
+    .map((alias) => normalizedText.indexOf(` ${alias} `))
     .filter((index) => index >= 0);
   return indexes.length ? Math.min(...indexes) : null;
 }
 
+function containsAlias(text: string, aliases: string[]): boolean {
+  return firstAliasIndex(text, aliases) !== null;
+}
+
 export function normalizeDomain(url: string): string | null {
+  const candidate = url.trim();
+  if (!candidate) return null;
+  const explicitScheme = /^[a-z][a-z0-9+.-]*:/i.exec(candidate)?.[0].toLocaleLowerCase();
+  if (explicitScheme && !["http:", "https:"].includes(explicitScheme)) return null;
   try {
-    return new URL(url).hostname.toLocaleLowerCase().replace(/\.$/, "").replace(/^www\./, "");
+    const parseTarget = candidate.startsWith("//")
+      ? `http:${candidate}`
+      : explicitScheme
+        ? candidate
+        : `http://${candidate}`;
+    const hostname = new URL(parseTarget).hostname
+      .toLocaleLowerCase()
+      .replace(/\.$/, "")
+      .replace(/^www\./, "");
+    return hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+export function safeExternalUrl(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    return ["http:", "https:"].includes(parsed.protocol) && parsed.hostname
+      ? parsed.href
+      : null;
   } catch {
     return null;
   }
@@ -360,13 +385,10 @@ export function buildDashboardEvidence(
   });
 
   const claimsWithContext = claims.map((claim): ClaimWithContext => {
-    const result = analysis.results.find((candidate) =>
-      candidate.response_text.includes(claim.claim_text),
-    );
     return {
       ...claim,
-      query: result?.prompt ?? `Response ${claim.response_id.slice(0, 8)}`,
-      provider: result?.provider ?? claim.classifier,
+      query: claim.response_prompt,
+      provider: claim.response_provider,
     };
   });
 
@@ -477,7 +499,9 @@ export function buildDashboardEvidence(
   }
 
   const riskyClaims = claimsWithContext.filter(
-    (claim) => !["supported", "partially_supported"].includes(claim.classification),
+    (claim) =>
+      claim.classifier !== "not_configured" &&
+      !["supported", "partially_supported"].includes(claim.classification),
   );
   if (riskyClaims.length) {
     const topClaims = [...riskyClaims]

@@ -53,6 +53,7 @@ class GeminiProvider(HTTPProvider):
             "model": self.model_identifier,
             "input": prompt,
             "tools": [{"type": "google_search"}],
+            "store": False,
         }
 
     def normalize_response(self, raw_response: dict[str, Any]) -> NormalizedProviderPayload:
@@ -68,6 +69,7 @@ class GeminiProvider(HTTPProvider):
     ) -> NormalizedProviderPayload:
         text_parts: list[str] = []
         citations: list[Citation] = []
+        text_offset = 0
         for step in raw_response.get("steps", []):
             if not isinstance(step, dict) or step.get("type") != "model_output":
                 continue
@@ -77,7 +79,15 @@ class GeminiProvider(HTTPProvider):
                 text = content.get("text")
                 if isinstance(text, str):
                     text_parts.append(text)
-                citations.extend(self._interaction_citations(content, text))
+                citations.extend(
+                    self._interaction_citations(
+                        content,
+                        text,
+                        text_offset=text_offset,
+                    )
+                )
+                if isinstance(text, str):
+                    text_offset += len(text)
 
         if not text_parts:
             raise ProviderPayloadError("Gemini interaction did not contain output text")
@@ -114,7 +124,12 @@ class GeminiProvider(HTTPProvider):
         )
 
     @staticmethod
-    def _interaction_citations(content: dict[str, Any], text: object) -> list[Citation]:
+    def _interaction_citations(
+        content: dict[str, Any],
+        text: object,
+        *,
+        text_offset: int = 0,
+    ) -> list[Citation]:
         annotations = content.get("annotations", [])
         if not isinstance(annotations, list):
             return []
@@ -132,8 +147,8 @@ class GeminiProvider(HTTPProvider):
                 Citation(
                     url=url,
                     title=GeminiProvider._string_or_none(annotation.get("title")),
-                    start_index=start_index,
-                    end_index=end_index,
+                    start_index=(start_index + text_offset if start_index is not None else None),
+                    end_index=end_index + text_offset if end_index is not None else None,
                     cited_text=cited_text,
                 )
             )
@@ -214,10 +229,14 @@ class GeminiProvider(HTTPProvider):
         if not isinstance(usage, dict):
             usage = {}
         input_tokens = GeminiProvider._integer(
-            usage.get("input_tokens") or usage.get("promptTokenCount")
+            usage.get("input_tokens")
+            or usage.get("total_input_tokens")
+            or usage.get("promptTokenCount")
         )
         output_tokens = GeminiProvider._integer(
-            usage.get("output_tokens") or usage.get("candidatesTokenCount")
+            usage.get("output_tokens")
+            or usage.get("total_output_tokens")
+            or usage.get("candidatesTokenCount")
         )
         total_tokens = GeminiProvider._integer(
             usage.get("total_tokens") or usage.get("totalTokenCount")
@@ -229,10 +248,14 @@ class GeminiProvider(HTTPProvider):
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             cached_tokens=GeminiProvider._optional_integer(
-                usage.get("cached_tokens") or usage.get("cachedContentTokenCount")
+                usage.get("cached_tokens")
+                or usage.get("total_cached_tokens")
+                or usage.get("cachedContentTokenCount")
             ),
             reasoning_tokens=GeminiProvider._optional_integer(
-                usage.get("reasoning_tokens") or usage.get("thoughtsTokenCount")
+                usage.get("reasoning_tokens")
+                or usage.get("total_thought_tokens")
+                or usage.get("thoughtsTokenCount")
             ),
         )
 

@@ -6,13 +6,19 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint . && tsc --noEmit",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "next": "16.2.12",
     "react": "19.2.8",
     "react-dom": "19.2.8"
+  },
+  "overrides": {
+    "minimatch": "10.2.3",
+    "postcss": "8.5.18",
+    "sharp": "0.35.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

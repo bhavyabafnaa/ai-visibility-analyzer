@@ -41,6 +41,19 @@ class ProjectRepository:
         )
         return await self._session.scalar(statement)
 
+    async def get_by_name(self, name: str) -> Project | None:
+        statement = (
+            select(Project)
+            .where(Project.name == name)
+            .options(
+                selectinload(Project.site),
+                selectinload(Project.competitors),
+            )
+            .order_by(Project.created_at, Project.id)
+            .limit(1)
+        )
+        return await self._session.scalar(statement)
+
     async def list(self, *, offset: int, limit: int) -> list[Project]:
         statement = (
             select(Project)

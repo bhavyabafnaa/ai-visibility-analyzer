@@ -182,6 +182,8 @@ describe("Dashboard", () => {
         explanation: "Claim classification was not configured.",
         classifier: "not_configured",
         model_identifier: null,
+        response_prompt: "Compare Acme Cloud with Northstar AI for citation monitoring.",
+        response_provider: "mock",
         segmentation_rule_version: "claim-segmentation-v1",
         evidence: [
           {

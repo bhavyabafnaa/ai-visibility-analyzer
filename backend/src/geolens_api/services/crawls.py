@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -44,12 +45,14 @@ class CrawlJobService:
         site = await self._crawls.get_site(site_id)
         if site is None:
             raise SiteNotFoundError(site_id)
-        await validator.validate(site.url)
+        site_url = site.url
+        await self._session.commit()
+        await validator.validate(site_url)
 
         job = await self._crawls.create_job(site_id)
         await self._session.commit()
         try:
-            job.celery_task_id = queue.enqueue(job.id)
+            job.celery_task_id = await asyncio.to_thread(queue.enqueue, job.id)
         except Exception:
             job.status = CrawlJobStatus.FAILED
             job.completed_at = datetime.now(timezone.utc)
@@ -57,7 +60,7 @@ class CrawlJobService:
             self._crawls.add_error(
                 job.id,
                 CrawlFailure(
-                    url=site.url,
+                    url=site_url,
                     depth=None,
                     stage="queue",
                     error_type="queue_unavailable",

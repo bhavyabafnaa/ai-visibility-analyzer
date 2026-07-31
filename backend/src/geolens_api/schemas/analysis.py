@@ -26,6 +26,8 @@ class AnalysisStartRequest(BaseModel):
         normalized = [value.strip().lower() for value in values]
         if any(not value for value in normalized):
             raise ValueError("provider names cannot be blank")
+        if any(len(value) > 100 for value in normalized):
+            raise ValueError("provider names cannot exceed 100 characters")
         if len(set(normalized)) != len(normalized):
             raise ValueError("provider names must be unique")
         return normalized
@@ -36,6 +38,8 @@ class AnalysisStartRequest(BaseModel):
         normalized = [value.strip() for value in values]
         if any(not value for value in normalized):
             raise ValueError("prompts cannot be blank")
+        if any(len(value) > 10_000 for value in normalized):
+            raise ValueError("prompts cannot exceed 10000 characters")
         if len(set(normalized)) != len(normalized):
             raise ValueError("prompts must be unique")
         return normalized
@@ -48,6 +52,8 @@ class AnalysisStartRequest(BaseModel):
         normalized = value.strip().lower()
         if not normalized:
             raise ValueError("claim_classifier_provider cannot be blank")
+        if len(normalized) > 100:
+            raise ValueError("claim_classifier_provider cannot exceed 100 characters")
         return normalized
 
     @model_validator(mode="after")
@@ -154,5 +160,7 @@ class AnalysisClaimResponse(BaseModel):
     explanation: str
     classifier: str
     model_identifier: str | None
+    response_prompt: str
+    response_provider: str
     segmentation_rule_version: str
     evidence: list[ClaimEvidenceResponse]

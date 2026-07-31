@@ -1,4 +1,5 @@
-from pydantic import AnyUrl
+import pytest
+from pydantic import AnyHttpUrl, AnyUrl, ValidationError
 from pytest import MonkeyPatch
 
 from geolens_api.config import Settings
@@ -38,3 +39,11 @@ def test_provider_models_and_limits_load_from_environment(monkeypatch: MonkeyPat
     assert settings.gemini_model == "gemini-env-model"
     assert settings.perplexity_model == "perplexity-env-model"
     assert settings.provider_max_retries == 4
+
+
+def test_production_rejects_plaintext_provider_endpoints() -> None:
+    with pytest.raises(ValidationError, match="must use HTTPS"):
+        Settings(
+            app_environment="production",
+            openai_base_url=AnyHttpUrl("http://provider.internal/v1"),
+        )

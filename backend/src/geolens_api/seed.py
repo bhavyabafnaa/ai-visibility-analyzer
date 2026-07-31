@@ -16,10 +16,7 @@ from geolens_api.services.projects import ProjectService
 
 async def seed_demo() -> None:
     async with async_session_factory() as session:
-        projects = await ProjectRepository(session).list(offset=0, limit=100)
-        existing = next(
-            (project for project in projects if project.name == DEMO_PROJECT_NAME), None
-        )
+        existing = await ProjectRepository(session).get_by_name(DEMO_PROJECT_NAME)
         if existing is not None:
             print(f"Demo project already exists: {existing.id}")
             return

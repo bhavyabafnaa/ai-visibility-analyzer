@@ -1,7 +1,8 @@
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ProviderResponseStatus(str, Enum):
@@ -17,12 +18,30 @@ class ProviderResponseStatus(str, Enum):
 class Citation(BaseModel):
     """Provider-neutral source reference."""
 
-    url: str = Field(min_length=1)
+    url: str = Field(min_length=1, max_length=2048)
     title: str | None = None
     start_index: int | None = Field(default=None, ge=0)
     end_index: int | None = Field(default=None, ge=0)
     cited_text: str | None = None
     published_at: str | None = None
+
+    @field_validator("url")
+    @classmethod
+    def validate_http_url(cls, value: str) -> str:
+        """Keep provider-controlled citation links safe for downstream rendering."""
+        try:
+            parsed = urlsplit(value)
+            _ = parsed.port
+        except ValueError as error:
+            raise ValueError("citation URL has an invalid host or port") from error
+        if (
+            parsed.scheme.casefold() not in {"http", "https"}
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError("citation URL must be an HTTP(S) URL without credentials")
+        return value
 
     @model_validator(mode="after")
     def validate_text_range(self) -> "Citation":
@@ -58,8 +77,8 @@ class ProviderError(BaseModel):
 class ProviderResponse(BaseModel):
     """Common result returned by every model provider adapter."""
 
-    provider: str = Field(min_length=1)
-    model_identifier: str = Field(min_length=1)
+    provider: str = Field(min_length=1, max_length=100)
+    model_identifier: str = Field(min_length=1, max_length=255)
     response_text: str
     citations: list[Citation] = Field(default_factory=list)
     raw_response: dict[str, Any] = Field(default_factory=dict)

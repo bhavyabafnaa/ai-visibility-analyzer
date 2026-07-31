@@ -2,31 +2,36 @@
 
 ## Status and scope
 
-This document describes the project foundation, project persistence, secure crawl pipeline,
-and provider-neutral prompt execution. Metric computation and authentication are not yet
-implemented.
+This document describes the 0.1.0 release-candidate topology: project persistence, secure crawl
+pipeline, provider-neutral prompt execution, deterministic measurements, opt-in model-assisted
+claim classification, and the evidence dashboard. Authentication and multi-tenant isolation are
+not implemented.
 
 ## System context
 
 ```mermaid
 flowchart LR
-    User[User] --> Web[Next.js frontend]
-    Web --> API[FastAPI backend]
+    User[Browser] --> Web[Next.js frontend and same-origin proxy]
+    Web --> API[FastAPI API]
     API --> DB[(PostgreSQL)]
     API --> Queue[(Redis)]
     API --> Providers[AI and search providers]
     Queue --> Worker[Celery worker]
     Worker --> DB
-    Worker --> Site[Configured website]
+    Worker --> Site[Authorized public website]
 ```
+
+Provider keys cross only the API-to-provider boundary. User-supplied crawl targets cross only the
+worker-to-website boundary after URL validation, public-address resolution, and address pinning.
 
 ## Components
 
 ### Frontend
 
-The Next.js TypeScript application owns browser-facing presentation and, in future, will call
-the backend over HTTP. The initial application is a static placeholder with no business
-behavior. `NEXT_PUBLIC_API_URL` is the public backend base URL.
+The Next.js TypeScript application owns browser-facing onboarding, provider/query launch
+controls, evidence tables, deterministic metric presentation, claim review, and ranked
+recommendations. Browser calls use the same-origin `/api/geolens` route. The Next.js server reads
+the server-only `GEOLENS_API_URL`; no provider key is a public frontend variable.
 
 ### Backend
 
@@ -115,12 +120,17 @@ and size policies; Playwright is not installed by default.
 ## Runtime topology
 
 Docker Compose supplies one container for each component and health checks for PostgreSQL,
-Redis, and the backend. The API and worker wait for PostgreSQL and Redis; the frontend waits
-for the backend's process health.
+Redis, API, worker, and frontend. PostgreSQL and Redis readiness gate the API. The API entrypoint
+runs `alembic upgrade head` before starting Uvicorn. API database readiness gates the worker and
+frontend, so queued work cannot begin against an unmigrated schema.
 
 The `/health` response means only that the API process can serve HTTP. `/ready` executes a
 database query and returns HTTP 503 while PostgreSQL is unavailable. A Redis failure during
 crawl creation is surfaced as HTTP 503 and persisted on the crawl job.
+
+The API and worker use the same backend image and run as an unprivileged application user. Only
+the API enables startup migrations. This is safe for the single-API Compose topology; a scaled
+deployment needs one external serialized migration job.
 
 ## Configuration
 
@@ -132,7 +142,7 @@ checked-in values.
 
 ## Dependency direction
 
-Future code should preserve these boundaries:
+Code should preserve these boundaries:
 
 ```text
 HTTP/UI adapters -> application use cases -> domain definitions
@@ -158,3 +168,5 @@ The following choices require business requirements and are intentionally open:
 - observability and deployment platform
 - API versioning and generated client strategy
 - aggregation windows beyond a single persisted analysis run
+- historical-run navigation and scheduled execution
+- a renderer implementation that applies the crawler SSRF policy to every subresource

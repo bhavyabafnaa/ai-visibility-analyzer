@@ -54,11 +54,13 @@ class OpenAIProvider(HTTPProvider):
             "input": prompt,
             "tools": [{"type": "web_search"}],
             "include": ["web_search_call.action.sources"],
+            "store": False,
         }
 
     def normalize_response(self, raw_response: dict[str, Any]) -> NormalizedProviderPayload:
         text_parts: list[str] = []
         citations: list[Citation] = []
+        text_offset = 0
 
         for output_item in raw_response.get("output", []):
             if not isinstance(output_item, dict) or output_item.get("type") != "message":
@@ -69,7 +71,15 @@ class OpenAIProvider(HTTPProvider):
                 text = content.get("text")
                 if isinstance(text, str):
                     text_parts.append(text)
-                citations.extend(self._normalize_annotations(content.get("annotations", []), text))
+                citations.extend(
+                    self._normalize_annotations(
+                        content.get("annotations", []),
+                        text,
+                        text_offset=text_offset,
+                    )
+                )
+                if isinstance(text, str):
+                    text_offset += len(text)
 
         if not text_parts:
             raise ProviderPayloadError("OpenAI response did not contain output text")
@@ -98,7 +108,12 @@ class OpenAIProvider(HTTPProvider):
         )
 
     @staticmethod
-    def _normalize_annotations(annotations: object, text: object) -> list[Citation]:
+    def _normalize_annotations(
+        annotations: object,
+        text: object,
+        *,
+        text_offset: int = 0,
+    ) -> list[Citation]:
         if not isinstance(annotations, list):
             return []
         normalized: list[Citation] = []
@@ -125,8 +140,8 @@ class OpenAIProvider(HTTPProvider):
                 Citation(
                     url=url,
                     title=OpenAIProvider._string_or_none(citation_data.get("title")),
-                    start_index=start_index,
-                    end_index=end_index,
+                    start_index=(start_index + text_offset if start_index is not None else None),
+                    end_index=end_index + text_offset if end_index is not None else None,
                     cited_text=cited_text,
                 )
             )

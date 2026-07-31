@@ -109,6 +109,7 @@ class AnalysisService:
                 crawl_job_id=data.crawl_job_id,
                 started_at=started_at,
             )
+            await self._required_session().commit()
 
         executions = [
             self._execute(provider, prompt) for provider in providers for prompt in data.prompts
@@ -117,17 +118,21 @@ class AnalysisService:
         analysis_status = self._analysis_status(results)
 
         if run is not None and project is not None:
-            await self._persist_analysis(
-                run_id=run.id,
-                project=project,
-                crawl_job_id=data.crawl_job_id,
-                results=results,
-                classifier=classifier,
-            )
-            run.status = AnalysisRunStatus(analysis_status.value)
-            completed_at = datetime.now(timezone.utc)
-            run.completed_at = completed_at
-            await self._required_session().commit()
+            try:
+                await self._persist_analysis(
+                    run_id=run.id,
+                    project=project,
+                    crawl_job_id=data.crawl_job_id,
+                    results=results,
+                    classifier=classifier,
+                )
+                run.status = AnalysisRunStatus(analysis_status.value)
+                completed_at = datetime.now(timezone.utc)
+                run.completed_at = completed_at
+                await self._required_session().commit()
+            except Exception:
+                await self._mark_run_failed(run.id)
+                raise
             analysis_id = run.id
             persisted = True
         else:
@@ -239,6 +244,8 @@ class AnalysisService:
             persisted_responses,
             crawl_candidates,
         )
+        # Provider/classifier I/O must never run while a database transaction is open.
+        await self._required_session().commit()
         assessments = await asyncio.gather(
             *(classifier.classify(work.segment, work.evidence) for work in claim_work)
         )
@@ -250,7 +257,10 @@ class AnalysisService:
                 evidence=work.evidence,
             )
 
-        risk = aggregate_claim_risk(list(assessments))
+        classified_assessments = [
+            assessment for assessment in assessments if assessment.classifier != "not_configured"
+        ]
+        risk = aggregate_claim_risk(classified_assessments)
         repository.add_risk_score(
             analysis_run_id=run_id,
             numerator=risk.numerator,
@@ -260,6 +270,17 @@ class AnalysisService:
             rule_version=risk.rule_version,
             disclaimer=risk.disclaimer,
         )
+
+    async def _mark_run_failed(self, run_id: UUID) -> None:
+        session = self._required_session()
+        await session.rollback()
+        run = await self._required_repository().get_run(run_id)
+        if run is None:
+            return
+        run.status = AnalysisRunStatus.FAILED
+        run.completed_at = datetime.now(timezone.utc)
+        run.error_message = "Analysis processing failed"
+        await session.commit()
 
     def _persist_deterministic_scores(
         self,

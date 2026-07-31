@@ -57,3 +57,17 @@ def test_provider_contract_requires_error_details_for_failure() -> None:
 def test_citation_rejects_reversed_text_range() -> None:
     with pytest.raises(ValidationError, match="must not precede"):
         Citation(url="https://example.test", start_index=5, end_index=4)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "javascript:alert(1)",
+        "data:text/html,unsafe",
+        "https://user:password@example.test/private",
+        "example.test/without-a-scheme",
+    ],
+)
+def test_citation_rejects_links_that_are_not_safe_http_urls(url: str) -> None:
+    with pytest.raises(ValidationError, match=r"HTTP\(S\)"):
+        Citation(url=url)

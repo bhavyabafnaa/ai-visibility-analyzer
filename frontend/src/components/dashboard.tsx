@@ -17,6 +17,7 @@ import type {
 import {
   buildDashboardEvidence,
   displayPercent,
+  safeExternalUrl,
   type DashboardEvidence,
 } from "@/lib/evidence";
 
@@ -245,13 +246,21 @@ export function Dashboard() {
       let nextBundle = emptyBundle(analysis);
       if (analysis.persisted) {
         const base = `/analyses/${analysis.analysis_id}`;
-        const [citations, entities, scores, claims] = await Promise.all([
-          apiRequest<AnalysisCitationResponse[]>(`${base}/citations`),
-          apiRequest<AnalysisEntityResponse[]>(`${base}/entities`),
-          apiRequest<AnalysisScoreResponse[]>(`${base}/scores`),
-          apiRequest<AnalysisClaimResponse[]>(`${base}/claims`),
-        ]);
-        nextBundle = { analysis, citations, entities, scores, claims };
+        try {
+          const [citations, entities, scores, claims] = await Promise.all([
+            apiRequest<AnalysisCitationResponse[]>(`${base}/citations`),
+            apiRequest<AnalysisEntityResponse[]>(`${base}/entities`),
+            apiRequest<AnalysisScoreResponse[]>(`${base}/scores`),
+            apiRequest<AnalysisClaimResponse[]>(`${base}/claims`),
+          ]);
+          nextBundle = { analysis, citations, entities, scores, claims };
+        } catch (requestError) {
+          setError(
+            requestError instanceof Error
+              ? `Analysis completed, but persisted evidence could not be loaded: ${requestError.message}`
+              : "Analysis completed, but persisted evidence could not be loaded.",
+          );
+        }
       }
       setBundle(nextBundle);
       setRunState(
@@ -896,7 +905,7 @@ function JobStatus({
         </strong>
         <span>
           Run {bundle.analysis.analysis_id.slice(0, 8)} · {evidence.eligibleCount} eligible ·{" "}
-          {evidence.failedCount} failed · {bundle.claims.length} claims reviewed
+          {evidence.failedCount} failed · {bundle.claims.length} claims extracted
         </span>
       </div>
       <div className="job-provider-status">
@@ -1365,24 +1374,42 @@ function ClaimRisk({
   onViewAll?: () => void;
 }) {
   const claims = expanded ? evidence.claims : evidence.claims.slice(0, 3);
+  const classifiedCount = evidence.claims.filter(
+    (claim) => claim.classifier !== "not_configured",
+  ).length;
   const riskMetric = evidence.metrics.find((metric) => metric.name === "Claim-support risk");
   return (
     <section className={`panel data-panel claim-panel ${expanded ? "full-view" : ""}`}>
       <PanelHeader
-        detail="Model-assisted prioritization grounded in stored evidence excerpts."
+        detail={
+          classifiedCount
+            ? "Model-assisted prioritization grounded in stored evidence excerpts."
+            : "Extracted claims are shown for review; no model classifier was requested."
+        }
         eyebrow="Evidence review"
         onViewAll={onViewAll}
         title="Claim-risk drilldown"
       />
       <div className="risk-summary">
         <div className="risk-gauge">
-          <span>{riskMetric ? displayPercent(riskMetric.value) : evidence.claims.length ? "Review" : "—"}</span>
+          <span>
+            {riskMetric?.value !== null && riskMetric?.value !== undefined
+              ? displayPercent(riskMetric.value)
+              : evidence.claims.length
+                ? "Review"
+                : "—"}
+          </span>
         </div>
         <div>
-          <strong>{evidence.claims.length} extracted claims</strong>
+          <strong>
+            {classifiedCount
+              ? `${classifiedCount} model-classified claims`
+              : `${evidence.claims.length} extracted claims · classifier not configured`}
+          </strong>
           <p>
-            This is not objective truth. Risk depends on available evidence and classifier
-            judgment.
+            {classifiedCount
+              ? "This is not objective truth. Risk depends on available evidence and classifier judgment."
+              : "No claim-support risk score is calculated until a classifier is explicitly selected."}
           </p>
         </div>
       </div>
@@ -1391,11 +1418,15 @@ function ClaimRisk({
           <details className="claim-item" key={claim.id} open={expanded}>
             <summary>
               <span className={`claim-classification ${claim.classification}`}>
-                {statusLabel(claim.classification)}
+                {claim.classifier === "not_configured"
+                  ? "Not classified"
+                  : statusLabel(claim.classification)}
               </span>
               <span className="claim-text">{claim.claim_text}</span>
               <span className="claim-confidence">
-                {Math.round(claim.confidence * 100)}%
+                {claim.classifier === "not_configured"
+                  ? "No score"
+                  : `${Math.round(claim.confidence * 100)}%`}
                 <Icon name="chevron" size={15} />
               </span>
             </summary>
@@ -1415,23 +1446,31 @@ function ClaimRisk({
               <p>{claim.explanation}</p>
               <strong className="evidence-title">Evidence</strong>
               {claim.evidence.length ? (
-                claim.evidence.map((item) => (
-                  <div className="evidence-excerpt" key={item.id}>
-                    <span>
-                      <Icon name="file" />
-                    </span>
-                    <div>
-                      <strong>{item.source_reference}</strong>
-                      <p>{item.excerpt}</p>
-                      <small>{Math.round(item.relevance_score * 100)}% retrieval relevance</small>
+                claim.evidence.map((item) => {
+                  const externalUrl = safeExternalUrl(item.url);
+                  return (
+                    <div className="evidence-excerpt" key={item.id}>
+                      <span>
+                        <Icon name="file" />
+                      </span>
+                      <div>
+                        <strong>{item.source_reference}</strong>
+                        <p>{item.excerpt}</p>
+                        <small>{Math.round(item.relevance_score * 100)}% retrieval relevance</small>
+                      </div>
+                      {externalUrl ? (
+                        <a
+                          aria-label="Open evidence source"
+                          href={externalUrl}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          <Icon name="external" />
+                        </a>
+                      ) : null}
                     </div>
-                    {item.url ? (
-                      <a aria-label="Open evidence source" href={item.url} rel="noreferrer" target="_blank">
-                        <Icon name="external" />
-                      </a>
-                    ) : null}
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <p className="no-evidence">No relevant stored evidence was retrieved.</p>
               )}

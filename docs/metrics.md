@@ -214,8 +214,11 @@ aggregate_claim_support_risk =
     sum(claim_risk) / classified_claim_count
 ```
 
-The aggregate is undefined when no claims were segmented. Current rule version:
-`claim-risk-v1`.
+Claims marked `classifier = not_configured` are excluded from both the numerator and denominator;
+they were segmented but were not model-classified. The aggregate is undefined when no classifier
+was requested, no claims were segmented, or no classified assessment exists. A requested
+classifier that fails closed still contributes an `unverifiable` assessment with zero confidence.
+Current rule version: `claim-risk-v1`.
 
 The aggregate is always returned with `is_objective_truth = false` and this disclosure:
 
