@@ -80,6 +80,9 @@ class CrawlJobService:
             raise CrawlJobNotFoundError(crawl_id)
         return job
 
+    async def get_latest_for_site(self, site_id: UUID) -> CrawlJob | None:
+        return await self._crawls.get_latest_job_for_site(site_id)
+
 
 class CrawlExecutionService:
     def __init__(self, session: AsyncSession, crawler: WebsiteCrawler) -> None:

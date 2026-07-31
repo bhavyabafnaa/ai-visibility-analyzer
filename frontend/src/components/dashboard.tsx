@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, apiRequest } from "@/lib/api";
 import type {
@@ -10,6 +10,7 @@ import type {
   AnalysisEntityResponse,
   AnalysisScoreResponse,
   AnalysisStartResponse,
+  CrawlJobResponse,
   ProjectCreate,
   ProjectResponse,
   ProviderAvailabilityResponse,
@@ -17,6 +18,7 @@ import type {
 import {
   buildDashboardEvidence,
   displayPercent,
+  isReservedExampleUrl,
   safeExternalUrl,
   type DashboardEvidence,
 } from "@/lib/evidence";
@@ -45,6 +47,16 @@ interface SetupDraft {
   domain: string;
   aliases: string;
   competitors: CompetitorDraft[];
+}
+
+interface AttachedCrawlEvidence {
+  crawlId: string;
+  pageCount: number;
+}
+
+interface CrawlRecoveryResult {
+  key: string;
+  error: string;
 }
 
 const DEMO_SETUP: SetupDraft = {
@@ -130,8 +142,31 @@ export function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [setupDraft, setSetupDraft] = useState<SetupDraft>(DEMO_SETUP);
   const [savingProject, setSavingProject] = useState(false);
+  const [activeCrawl, setActiveCrawl] = useState<CrawlJobResponse | null>(null);
+  const [crawlRecoveryAttempt, setCrawlRecoveryAttempt] = useState(0);
+  const [crawlRecoveryResult, setCrawlRecoveryResult] = useState<CrawlRecoveryResult>({
+    key: "",
+    error: "",
+  });
+  const [crawlStarting, setCrawlStarting] = useState(false);
+  const [crawlPollingError, setCrawlPollingError] = useState("");
+  const [latestSuccessfulCrawlId, setLatestSuccessfulCrawlId] = useState<string | null>(null);
+  const [crawlPollAttempt, setCrawlPollAttempt] = useState(0);
+  const [analysisCrawlEvidence, setAnalysisCrawlEvidence] =
+    useState<AttachedCrawlEvidence | null>(null);
+  const projectScopeRef = useRef(0);
+  const crawlStartInFlightRef = useRef(false);
 
   const activeProject = projects.find((project) => project.id === activeProjectId) ?? null;
+  const activeSiteId = activeProject?.site?.id ?? null;
+  const activeSiteUrl = activeProject?.site?.url ?? null;
+  const crawlRecoveryKey = activeSiteId ? `${activeSiteId}:${crawlRecoveryAttempt}` : "";
+  const canRecoverCrawl = Boolean(
+    activeSiteId && activeSiteUrl && !isReservedExampleUrl(activeSiteUrl),
+  );
+  const crawlRecovering = canRecoverCrawl && crawlRecoveryResult.key !== crawlRecoveryKey;
+  const crawlRecoveryError =
+    crawlRecoveryResult.key === crawlRecoveryKey ? crawlRecoveryResult.error : "";
   const evidence = useMemo(
     () => (activeProject && bundle ? buildDashboardEvidence(activeProject, bundle) : null),
     [activeProject, bundle],
@@ -170,6 +205,114 @@ export function Dashboard() {
     };
   }, []);
 
+  useEffect(
+    () => () => {
+      projectScopeRef.current += 1;
+      crawlStartInFlightRef.current = false;
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!activeSiteId || !activeSiteUrl || isReservedExampleUrl(activeSiteUrl)) {
+      return;
+    }
+
+    const siteId = activeSiteId;
+    const recoveryKey = `${siteId}:${crawlRecoveryAttempt}`;
+    const projectScope = projectScopeRef.current;
+    let cancelled = false;
+
+    async function recoverLatestCrawl() {
+      try {
+        const crawl = await apiRequest<CrawlJobResponse | null>(`/sites/${siteId}/crawls/latest`);
+        if (cancelled || projectScope !== projectScopeRef.current) return;
+        if (crawl && crawl.site_id !== siteId) {
+          setCrawlRecoveryResult({
+            key: recoveryKey,
+            error: "The saved crawl did not match the active project's website.",
+          });
+          return;
+        }
+        setActiveCrawl(crawl);
+        setLatestSuccessfulCrawlId(crawl?.status === "succeeded" ? crawl.id : null);
+        setCrawlRecoveryResult({ key: recoveryKey, error: "" });
+      } catch (requestError) {
+        if (cancelled || projectScope !== projectScopeRef.current) return;
+        setCrawlRecoveryResult({
+          key: recoveryKey,
+          error:
+            requestError instanceof Error
+              ? requestError.message
+              : "The latest crawl status could not be loaded.",
+        });
+      }
+    }
+
+    void recoverLatestCrawl();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSiteId, activeSiteUrl, crawlRecoveryAttempt]);
+
+  useEffect(() => {
+    if (
+      !activeCrawl ||
+      !activeProject?.site ||
+      crawlPollingError ||
+      !["pending", "running"].includes(activeCrawl.status)
+    ) {
+      return;
+    }
+
+    const crawlId = activeCrawl.id;
+    const siteId = activeProject.site.id;
+    const projectScope = projectScopeRef.current;
+    let cancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const crawl = await apiRequest<CrawlJobResponse>(`/crawls/${crawlId}`);
+        if (cancelled || projectScope !== projectScopeRef.current) return;
+        if (crawl.site_id !== siteId) {
+          setCrawlPollingError("The crawl status did not match the active project's website.");
+          return;
+        }
+        setActiveCrawl(crawl);
+        setCrawlPollingError("");
+        if (crawl.status === "succeeded") {
+          setLatestSuccessfulCrawlId(crawl.id);
+        } else if (crawl.status === "failed") {
+          setLatestSuccessfulCrawlId(null);
+        }
+      } catch (requestError) {
+        if (cancelled || projectScope !== projectScopeRef.current) return;
+        setCrawlPollingError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Crawl status could not be refreshed.",
+        );
+      }
+    }, 2_000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [activeCrawl, activeProject?.site, crawlPollAttempt, crawlPollingError]);
+
+  function clearProjectScopedState() {
+    projectScopeRef.current += 1;
+    crawlStartInFlightRef.current = false;
+    setActiveCrawl(null);
+    setCrawlRecoveryAttempt(0);
+    setCrawlRecoveryResult({ key: "", error: "" });
+    setCrawlStarting(false);
+    setCrawlPollingError("");
+    setLatestSuccessfulCrawlId(null);
+    setCrawlPollAttempt(0);
+    setAnalysisCrawlEvidence(null);
+  }
+
   async function createProject() {
     if (!setupDraft.name.trim() || !setupDraft.domain.trim()) {
       setError("Project name and target domain are required.");
@@ -196,6 +339,7 @@ export function Dashboard() {
         body: payload,
       });
       setProjects((current) => [project, ...current]);
+      clearProjectScopedState();
       setActiveProjectId(project.id);
       setPrompts(DEFAULT_PROMPTS);
       setBundle(null);
@@ -209,6 +353,7 @@ export function Dashboard() {
   }
 
   function selectProject(projectId: string) {
+    clearProjectScopedState();
     setActiveProjectId(projectId);
     setBundle(null);
     setRunState("idle");
@@ -220,6 +365,63 @@ export function Dashboard() {
     setSelectedProviders((current) =>
       current.includes(name) ? current.filter((provider) => provider !== name) : [...current, name],
     );
+  }
+
+  async function startCrawl() {
+    const project = activeProject;
+    const site = project?.site;
+    if (
+      !project ||
+      !site ||
+      isReservedExampleUrl(site.url) ||
+      crawlStartInFlightRef.current ||
+      crawlRecovering ||
+      crawlStarting ||
+      activeCrawl?.status === "pending" ||
+      activeCrawl?.status === "running"
+    ) {
+      return;
+    }
+
+    const projectScope = projectScopeRef.current;
+    crawlStartInFlightRef.current = true;
+    setCrawlStarting(true);
+    setActiveCrawl(null);
+    setLatestSuccessfulCrawlId(null);
+    setCrawlPollingError("");
+    try {
+      const crawl = await apiRequest<CrawlJobResponse>(`/sites/${site.id}/crawls`, {
+        method: "POST",
+      });
+      if (projectScope !== projectScopeRef.current) return;
+      if (crawl.site_id !== site.id) {
+        setCrawlPollingError("The crawl response did not match the active project's website.");
+        return;
+      }
+      setActiveCrawl(crawl);
+      if (crawl.status === "succeeded") {
+        setLatestSuccessfulCrawlId(crawl.id);
+      }
+    } catch (requestError) {
+      if (projectScope !== projectScopeRef.current) return;
+      setCrawlPollingError(
+        requestError instanceof Error ? requestError.message : "The website crawl could not start.",
+      );
+    } finally {
+      if (projectScope === projectScopeRef.current) {
+        crawlStartInFlightRef.current = false;
+        setCrawlStarting(false);
+      }
+    }
+  }
+
+  function retryCrawlPolling() {
+    setCrawlPollingError("");
+    setCrawlPollAttempt((current) => current + 1);
+  }
+
+  function retryCrawlRecovery() {
+    setCrawlRecoveryAttempt((current) => current + 1);
   }
 
   async function runAnalysis() {
@@ -234,15 +436,24 @@ export function Dashboard() {
     }
     setError("");
     setRunState("running");
+    const projectScope = projectScopeRef.current;
+    const attachedCrawl =
+      activeCrawl?.status === "succeeded" &&
+      activeCrawl.site_id === activeProject.site?.id &&
+      activeCrawl.id === latestSuccessfulCrawlId
+        ? { crawlId: activeCrawl.id, pageCount: activeCrawl.page_count }
+        : null;
     try {
       const analysis = await apiRequest<AnalysisStartResponse>("/analyses", {
         method: "POST",
         body: {
           project_id: activeProject.id,
+          ...(attachedCrawl ? { crawl_job_id: attachedCrawl.crawlId } : {}),
           providers: selectedProviders,
           prompts: cleanPrompts,
         },
       });
+      if (projectScope !== projectScopeRef.current) return;
       let nextBundle = emptyBundle(analysis);
       if (analysis.persisted) {
         const base = `/analyses/${analysis.analysis_id}`;
@@ -253,6 +464,7 @@ export function Dashboard() {
             apiRequest<AnalysisScoreResponse[]>(`${base}/scores`),
             apiRequest<AnalysisClaimResponse[]>(`${base}/claims`),
           ]);
+          if (projectScope !== projectScopeRef.current) return;
           nextBundle = { analysis, citations, entities, scores, claims };
         } catch (requestError) {
           setError(
@@ -262,7 +474,9 @@ export function Dashboard() {
           );
         }
       }
+      if (projectScope !== projectScopeRef.current) return;
       setBundle(nextBundle);
+      setAnalysisCrawlEvidence(attachedCrawl);
       setRunState(
         analysis.status === "succeeded"
           ? "succeeded"
@@ -272,6 +486,7 @@ export function Dashboard() {
       );
       setView("overview");
     } catch (requestError) {
+      if (projectScope !== projectScopeRef.current) return;
       const message =
         requestError instanceof ApiError || requestError instanceof Error
           ? requestError.message
@@ -445,8 +660,17 @@ export function Dashboard() {
           ) : activeProject ? (
             <WorkspaceView
               bundle={bundle}
+              activeCrawl={activeCrawl}
+              analysisCrawlEvidence={analysisCrawlEvidence}
+              crawlPollingError={crawlPollingError}
+              crawlRecovering={crawlRecovering}
+              crawlRecoveryError={crawlRecoveryError}
+              crawlStarting={crawlStarting}
               evidence={evidence}
+              onCrawl={() => void startCrawl()}
               onPromptChange={setPrompts}
+              onRetryCrawlPolling={retryCrawlPolling}
+              onRetryCrawlRecovery={retryCrawlRecovery}
               onRun={() => void runAnalysis()}
               onSelectView={setView}
               onToggleProvider={toggleProvider}
@@ -730,10 +954,19 @@ interface WorkspaceViewProps {
   selectedProviders: string[];
   prompts: string[];
   bundle: AnalysisBundle | null;
+  activeCrawl: CrawlJobResponse | null;
+  analysisCrawlEvidence: AttachedCrawlEvidence | null;
+  crawlPollingError: string;
+  crawlRecovering: boolean;
+  crawlRecoveryError: string;
+  crawlStarting: boolean;
   evidence: DashboardEvidence | null;
   runState: RunState;
   view: View;
+  onCrawl: () => void;
   onPromptChange: (prompts: string[]) => void;
+  onRetryCrawlPolling: () => void;
+  onRetryCrawlRecovery: () => void;
   onToggleProvider: (name: string) => void;
   onRun: () => void;
   onSelectView: (view: View) => void;
@@ -743,13 +976,22 @@ function WorkspaceView(props: WorkspaceViewProps) {
   const {
     project,
     bundle,
+    activeCrawl,
+    analysisCrawlEvidence,
+    crawlPollingError,
+    crawlRecovering,
+    crawlRecoveryError,
+    crawlStarting,
     evidence,
     runState,
     view,
     prompts,
     providers,
     selectedProviders,
+    onCrawl,
     onPromptChange,
+    onRetryCrawlPolling,
+    onRetryCrawlRecovery,
     onToggleProvider,
     onRun,
     onSelectView,
@@ -803,11 +1045,28 @@ function WorkspaceView(props: WorkspaceViewProps) {
         ) : null}
       </section>
 
+      <WebsiteCrawlPanel
+        crawl={activeCrawl}
+        onCrawl={onCrawl}
+        onRetryPolling={onRetryCrawlPolling}
+        onRetryRecovery={onRetryCrawlRecovery}
+        pollingError={crawlPollingError}
+        project={project}
+        recovering={crawlRecovering}
+        recoveryError={crawlRecoveryError}
+        starting={crawlStarting}
+      />
+
       {runState === "running" ? (
         <RunningState prompts={prompts.length} providers={selectedProviders.length} />
       ) : null}
       {bundle && evidence ? (
-        <JobStatus bundle={bundle} evidence={evidence} runState={runState} />
+        <JobStatus
+          attachedCrawl={analysisCrawlEvidence}
+          bundle={bundle}
+          evidence={evidence}
+          runState={runState}
+        />
       ) : null}
 
       {!bundle && runState !== "running" ? (
@@ -854,6 +1113,215 @@ function WorkspaceView(props: WorkspaceViewProps) {
   );
 }
 
+function WebsiteCrawlPanel({
+  crawl,
+  onCrawl,
+  onRetryPolling,
+  onRetryRecovery,
+  pollingError,
+  project,
+  recovering,
+  recoveryError,
+  starting,
+}: {
+  crawl: CrawlJobResponse | null;
+  onCrawl: () => void;
+  onRetryPolling: () => void;
+  onRetryRecovery: () => void;
+  pollingError: string;
+  project: ProjectResponse;
+  recovering: boolean;
+  recoveryError: string;
+  starting: boolean;
+}) {
+  const site = project.site;
+  const isDemoSite = site ? isReservedExampleUrl(site.url) : false;
+  const isQueued = starting || crawl?.status === "pending";
+  const isRunning = crawl?.status === "running";
+  const isBusy = isQueued || isRunning;
+
+  return (
+    <section className="panel crawl-panel" aria-labelledby="website-evidence-heading">
+      <div className="crawl-panel-heading">
+        <span className="crawl-panel-icon">
+          <Icon name="globe" />
+        </span>
+        <div>
+          <p className="eyebrow">Optional analysis input</p>
+          <h2 id="website-evidence-heading">Website evidence</h2>
+          <p>Website text from a completed crawl can be used as evidence for claim review.</p>
+        </div>
+        <span className="crawl-url">
+          <small>Configured website</small>
+          <strong>{site?.url ?? "No website configured"}</strong>
+        </span>
+      </div>
+
+      {!site ? (
+        <div className="crawl-state crawl-state-unavailable">
+          <div>
+            <strong>No website is configured for this project</strong>
+            <p>Add a site to the project before starting a crawl. Analysis remains available.</p>
+          </div>
+          <button className="button button-secondary" disabled type="button">
+            Crawl unavailable
+          </button>
+        </div>
+      ) : isDemoSite ? (
+        <div className="crawl-state crawl-state-unavailable">
+          <div>
+            <strong>Website crawl unavailable for this demo</strong>
+            <p>
+              The seeded demo uses a non-routable example domain. Create a project with a public
+              website to test crawling.
+            </p>
+          </div>
+          <button className="button button-secondary" disabled type="button">
+            Crawl website
+          </button>
+        </div>
+      ) : recovering ? (
+        <div className="crawl-state crawl-state-progress" role="status">
+          <span className="crawl-activity">
+            <Icon name="activity" />
+          </span>
+          <div>
+            <strong>Loading crawl status</strong>
+            <p>Checking for the latest crawl saved for this website.</p>
+          </div>
+          <button className="button button-secondary" disabled type="button">
+            Checking status
+          </button>
+        </div>
+      ) : recoveryError ? (
+        <div className="crawl-state crawl-state-error" role="alert">
+          <span className="crawl-state-icon">
+            <Icon name="warning" />
+          </span>
+          <div>
+            <strong>Crawl status could not load</strong>
+            <p>{recoveryError}</p>
+          </div>
+          <button className="button button-secondary" onClick={onRetryRecovery} type="button">
+            Retry status check
+          </button>
+        </div>
+      ) : pollingError ? (
+        <div className="crawl-state crawl-state-error" role="alert">
+          <span className="crawl-state-icon">
+            <Icon name="warning" />
+          </span>
+          <div>
+            <strong>{crawl && isBusy ? "Crawl status check paused" : "Crawl could not start"}</strong>
+            <p>{pollingError}</p>
+          </div>
+          {crawl && isBusy ? (
+            <button className="button button-secondary" onClick={onRetryPolling} type="button">
+              Retry status check
+            </button>
+          ) : (
+            <button className="button button-secondary" onClick={onCrawl} type="button">
+              Retry crawl
+            </button>
+          )}
+        </div>
+      ) : isQueued ? (
+        <div className="crawl-state crawl-state-progress" role="status">
+          <span className="crawl-activity">
+            <Icon name="activity" />
+          </span>
+          <div>
+            <strong>Crawl queued</strong>
+            <p>{starting ? "Submitting the crawl request…" : "Waiting for a crawl worker to begin."}</p>
+          </div>
+          <button className="button button-secondary" disabled type="button">
+            Crawl in progress
+          </button>
+        </div>
+      ) : isRunning ? (
+        <div className="crawl-state crawl-state-progress" role="status">
+          <span className="crawl-activity">
+            <Icon name="activity" />
+          </span>
+          <div>
+            <strong>Crawling website</strong>
+            <p>The worker is collecting bounded website text and crawl errors.</p>
+          </div>
+          <button className="button button-secondary" disabled type="button">
+            Crawl in progress
+          </button>
+        </div>
+      ) : crawl?.status === "succeeded" ? (
+        <div className="crawl-state crawl-state-success" role="status">
+          <span className="crawl-state-icon">
+            <Icon name="check" />
+          </span>
+          <div className="crawl-result-copy">
+            <strong>Website crawl succeeded</strong>
+            <p>This successful crawl will be attached to the next analysis.</p>
+            <div className="crawl-stats">
+              <span>
+                <small>Pages crawled</small>
+                <strong>{crawl.page_count}</strong>
+              </span>
+              <span>
+                <small>Errors</small>
+                <strong>{crawl.error_count}</strong>
+              </span>
+              {crawl.completed_at ? (
+                <span>
+                  <small>Completed</small>
+                  <strong>{humanTime(crawl.completed_at)}</strong>
+                </span>
+              ) : null}
+            </div>
+            <details className="crawl-details">
+              <summary>Crawl details</summary>
+              <code>{crawl.id}</code>
+            </details>
+          </div>
+          <button className="button button-secondary" onClick={onCrawl} type="button">
+            Run crawl again
+          </button>
+        </div>
+      ) : crawl?.status === "failed" ? (
+        <div className="crawl-state crawl-state-error" role="alert">
+          <span className="crawl-state-icon">
+            <Icon name="warning" />
+          </span>
+          <div className="crawl-result-copy">
+            <strong>Website crawl failed</strong>
+            <p>{crawl.error_message ?? "The crawl worker could not complete this website."}</p>
+            <div className="crawl-stats">
+              <span>
+                <small>Pages crawled</small>
+                <strong>{crawl.page_count}</strong>
+              </span>
+              <span>
+                <small>Errors</small>
+                <strong>{crawl.error_count}</strong>
+              </span>
+            </div>
+          </div>
+          <button className="button button-secondary" onClick={onCrawl} type="button">
+            Retry crawl
+          </button>
+        </div>
+      ) : (
+        <div className="crawl-state">
+          <div>
+            <strong>Use website text as optional evidence</strong>
+            <p>Start a crawl, wait for success, then run an analysis to attach its page text.</p>
+          </div>
+          <button className="button button-secondary" onClick={onCrawl} type="button">
+            Crawl website
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function RunningState({ prompts, providers }: { prompts: number; providers: number }) {
   return (
     <section className="running-panel" aria-live="polite">
@@ -882,10 +1350,12 @@ function RunningState({ prompts, providers }: { prompts: number; providers: numb
 }
 
 function JobStatus({
+  attachedCrawl,
   bundle,
   evidence,
   runState,
 }: {
+  attachedCrawl: AttachedCrawlEvidence | null;
   bundle: AnalysisBundle;
   evidence: DashboardEvidence;
   runState: RunState;
@@ -906,6 +1376,11 @@ function JobStatus({
         <span>
           Run {bundle.analysis.analysis_id.slice(0, 8)} · {evidence.eligibleCount} eligible ·{" "}
           {evidence.failedCount} failed · {bundle.claims.length} claims extracted
+        </span>
+        <span className="analysis-evidence-summary">
+          {attachedCrawl
+            ? `Website evidence attached · ${attachedCrawl.pageCount} pages`
+            : "Analysis ran without website crawl evidence"}
         </span>
       </div>
       <div className="job-provider-status">

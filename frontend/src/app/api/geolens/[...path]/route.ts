@@ -10,8 +10,13 @@ const ALLOWED_PATHS = [
   /^crawls\/[0-9a-f-]{36}$/i,
 ];
 
-function isAllowed(path: string): boolean {
-  return ALLOWED_PATHS.some((pattern) => pattern.test(path));
+const GET_ONLY_ALLOWED_PATHS = [/^sites\/[0-9a-f-]{36}\/crawls\/latest$/i];
+
+function isAllowed(path: string, method: string): boolean {
+  return (
+    ALLOWED_PATHS.some((pattern) => pattern.test(path)) ||
+    (method === "GET" && GET_ONLY_ALLOWED_PATHS.some((pattern) => pattern.test(path)))
+  );
 }
 
 async function proxy(
@@ -20,7 +25,7 @@ async function proxy(
 ) {
   const { path: segments } = await context.params;
   const path = segments.join("/");
-  if (!isAllowed(path)) {
+  if (!isAllowed(path, request.method)) {
     return NextResponse.json({ detail: "Unknown API route" }, { status: 404 });
   }
 
