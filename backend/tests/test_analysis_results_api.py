@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -16,7 +16,9 @@ from geolens_api.providers.contract import (
     ProviderResponseStatus,
 )
 from geolens_api.providers.mock import MockFixture
+from geolens_api.queues import get_analysis_queue
 from geolens_api.routers.analyses import get_provider_registry
+from geolens_api.services.analyses import AnalysisService
 
 
 class SupportingClassifierProvider:
@@ -43,10 +45,28 @@ class SupportingClassifierProvider:
         )
 
 
+class RecordingAnalysisQueue:
+    def __init__(self) -> None:
+        self.analysis_ids: list[UUID] = []
+
+    def enqueue(self, analysis_id: UUID) -> str:
+        self.analysis_ids.append(analysis_id)
+        return "analysis-results-task"
+
+
 @pytest.fixture
 async def results_client(
     session: AsyncSession,
-) -> AsyncIterator[tuple[AsyncClient, Project, CrawlJob, SupportingClassifierProvider]]:
+) -> AsyncIterator[
+    tuple[
+        AsyncClient,
+        Project,
+        CrawlJob,
+        SupportingClassifierProvider,
+        ProviderRegistry,
+        AsyncSession,
+    ]
+]:
     project = Project(name="Acme Cloud", aliases=["Acme"])
     project.site = Site(url="https://acme.test")
     project.competitors = [
@@ -103,23 +123,32 @@ async def results_client(
         },
     )
     registry = ProviderRegistry([provider, classifier])
+    queue = RecordingAnalysisQueue()
 
     async def override_session() -> AsyncIterator[AsyncSession]:
         yield session
 
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_provider_registry] = lambda: registry
+    app.dependency_overrides[get_analysis_queue] = lambda: queue
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client, project, crawl, classifier
+        yield client, project, crawl, classifier, registry, session
     app.dependency_overrides.clear()
     await registry.aclose()
 
 
 async def test_persisted_analysis_exposes_citations_entities_scores_and_claims(
-    results_client: tuple[AsyncClient, Project, CrawlJob, SupportingClassifierProvider],
+    results_client: tuple[
+        AsyncClient,
+        Project,
+        CrawlJob,
+        SupportingClassifierProvider,
+        ProviderRegistry,
+        AsyncSession,
+    ],
 ) -> None:
-    client, project, crawl, classifier = results_client
+    client, project, crawl, classifier, registry, session = results_client
 
     started = await client.post(
         "/analyses",
@@ -132,10 +161,15 @@ async def test_persisted_analysis_exposes_citations_entities_scores_and_claims(
         },
     )
 
-    assert started.status_code == 201
+    assert started.status_code == 202
     analysis = started.json()
     assert analysis["persisted"] is True
     analysis_id = analysis["analysis_id"]
+    assert analysis["status"] == "pending"
+
+    await AnalysisService(registry, session).execute(UUID(analysis_id))
+    completed = (await client.get(f"/analyses/{analysis_id}")).json()
+    assert completed["status"] == "succeeded"
 
     citations = (await client.get(f"/analyses/{analysis_id}/citations")).json()
     entities = (await client.get(f"/analyses/{analysis_id}/entities")).json()
@@ -165,9 +199,16 @@ async def test_persisted_analysis_exposes_citations_entities_scores_and_claims(
 
 
 async def test_unconfigured_classifier_does_not_report_model_assisted_risk(
-    results_client: tuple[AsyncClient, Project, CrawlJob, SupportingClassifierProvider],
+    results_client: tuple[
+        AsyncClient,
+        Project,
+        CrawlJob,
+        SupportingClassifierProvider,
+        ProviderRegistry,
+        AsyncSession,
+    ],
 ) -> None:
-    client, project, _, classifier = results_client
+    client, project, _, classifier, registry, session = results_client
 
     started = await client.post(
         "/analyses",
@@ -178,8 +219,9 @@ async def test_unconfigured_classifier_does_not_report_model_assisted_risk(
         },
     )
 
-    assert started.status_code == 201
+    assert started.status_code == 202
     analysis_id = started.json()["analysis_id"]
+    await AnalysisService(registry, session).execute(UUID(analysis_id))
     scores = (await client.get(f"/analyses/{analysis_id}/scores")).json()
     claims = (await client.get(f"/analyses/{analysis_id}/claims")).json()
     risk = next(score for score in scores if score["name"] == "claim_support_risk")
@@ -193,9 +235,16 @@ async def test_unconfigured_classifier_does_not_report_model_assisted_risk(
 
 
 async def test_analysis_result_endpoints_return_404_for_unknown_run(
-    results_client: tuple[AsyncClient, Project, CrawlJob, SupportingClassifierProvider],
+    results_client: tuple[
+        AsyncClient,
+        Project,
+        CrawlJob,
+        SupportingClassifierProvider,
+        ProviderRegistry,
+        AsyncSession,
+    ],
 ) -> None:
-    client, _, _, _ = results_client
+    client, _, _, _, _, _ = results_client
     analysis_id = uuid4()
 
     response = await client.get(f"/analyses/{analysis_id}/scores")

@@ -2,21 +2,23 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from geolens_api.providers.contract import ProviderAvailability, ProviderResponse
 
 
 class AnalysisStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
     SUCCEEDED = "succeeded"
     COMPLETED_WITH_ERRORS = "completed_with_errors"
     FAILED = "failed"
 
 
 class AnalysisStartRequest(BaseModel):
+    project_id: UUID
     providers: list[str] = Field(min_length=1, max_length=10)
     prompts: list[str] = Field(min_length=1, max_length=100)
-    project_id: UUID | None = None
     crawl_job_id: UUID | None = None
     claim_classifier_provider: str | None = None
 
@@ -56,26 +58,32 @@ class AnalysisStartRequest(BaseModel):
             raise ValueError("claim_classifier_provider cannot exceed 100 characters")
         return normalized
 
-    @model_validator(mode="after")
-    def validate_persistence_options(self) -> "AnalysisStartRequest":
-        if self.project_id is None and (
-            self.crawl_job_id is not None or self.claim_classifier_provider is not None
-        ):
-            raise ValueError("project_id is required for crawl evidence or claim classification")
-        return self
-
 
 class PromptExecutionResponse(ProviderResponse):
     prompt: str
 
 
+class ProviderModelConfiguration(BaseModel):
+    name: str
+    model_identifier: str
+
+
 class AnalysisStartResponse(BaseModel):
     analysis_id: UUID
+    project_id: UUID
+    crawl_job_id: UUID | None
     status: AnalysisStatus
-    started_at: datetime
-    completed_at: datetime
-    results: list[PromptExecutionResponse]
-    persisted: bool = False
+    started_at: datetime | None
+    completed_at: datetime | None
+    error_message: str | None
+    celery_task_id: str | None
+    provider_configurations: list[ProviderModelConfiguration]
+    prompts: list[str]
+    claim_classifier_configuration: ProviderModelConfiguration | None
+    results: list[PromptExecutionResponse] = Field(default_factory=list)
+    persisted: bool = True
+    created_at: datetime
+    updated_at: datetime
 
 
 class ProviderAvailabilityResponse(ProviderAvailability):

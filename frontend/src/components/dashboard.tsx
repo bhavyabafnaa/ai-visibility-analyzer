@@ -31,6 +31,9 @@ const DEFAULT_PROMPTS = [
   "Which tools help marketing teams track brand mentions in AI answers?",
   "What should an enterprise look for in a generative search analytics platform?",
 ];
+const ANALYSIS_POLL_INTERVAL_MS = 2_000;
+const ANALYSIS_MAX_POLL_ATTEMPTS = 150;
+const TERMINAL_ANALYSIS_STATUSES = new Set(["succeeded", "completed_with_errors", "failed"]);
 
 type View = "overview" | "queries" | "citations" | "entities" | "claims" | "recommendations" | "setup";
 type LoadState = "loading" | "ready" | "error";
@@ -126,6 +129,10 @@ function statusLabel(status: string) {
 
 function emptyBundle(analysis: AnalysisStartResponse): AnalysisBundle {
   return { analysis, citations: [], entities: [], scores: [], claims: [] };
+}
+
+function waitForAnalysisPoll() {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ANALYSIS_POLL_INTERVAL_MS));
 }
 
 export function Dashboard() {
@@ -444,7 +451,7 @@ export function Dashboard() {
         ? { crawlId: activeCrawl.id, pageCount: activeCrawl.page_count }
         : null;
     try {
-      const analysis = await apiRequest<AnalysisStartResponse>("/analyses", {
+      let analysis = await apiRequest<AnalysisStartResponse>("/analyses", {
         method: "POST",
         body: {
           project_id: activeProject.id,
@@ -454,6 +461,24 @@ export function Dashboard() {
         },
       });
       if (projectScope !== projectScopeRef.current) return;
+      for (
+        let attempt = 0;
+        !TERMINAL_ANALYSIS_STATUSES.has(analysis.status) &&
+        attempt < ANALYSIS_MAX_POLL_ATTEMPTS;
+        attempt += 1
+      ) {
+        await waitForAnalysisPoll();
+        if (projectScope !== projectScopeRef.current) return;
+        analysis = await apiRequest<AnalysisStartResponse>(
+          `/analyses/${analysis.analysis_id}`,
+        );
+        if (analysis.project_id !== activeProject.id) {
+          throw new Error("The analysis status did not match the active project.");
+        }
+      }
+      if (!TERMINAL_ANALYSIS_STATUSES.has(analysis.status)) {
+        throw new Error("Analysis status polling timed out. The worker may still be processing it.");
+      }
       let nextBundle = emptyBundle(analysis);
       if (analysis.persisted) {
         const base = `/analyses/${analysis.analysis_id}`;
@@ -477,6 +502,9 @@ export function Dashboard() {
       if (projectScope !== projectScopeRef.current) return;
       setBundle(nextBundle);
       setAnalysisCrawlEvidence(attachedCrawl);
+      if (analysis.status === "failed") {
+        setError(analysis.error_message ?? "Analysis processing failed.");
+      }
       setRunState(
         analysis.status === "succeeded"
           ? "succeeded"
@@ -1032,13 +1060,17 @@ function WorkspaceView(props: WorkspaceViewProps) {
             </span>
             <span>
               <small>Latest run</small>
-              <strong>{humanTime(bundle.analysis.completed_at)}</strong>
+              <strong>
+                {bundle.analysis.completed_at ? humanTime(bundle.analysis.completed_at) : "Pending"}
+              </strong>
             </span>
             <span className="run-meta-divider" />
             <span>
               <small>Duration</small>
               <strong>
-                {duration(bundle.analysis.started_at, bundle.analysis.completed_at)}
+                {bundle.analysis.started_at && bundle.analysis.completed_at
+                  ? duration(bundle.analysis.started_at, bundle.analysis.completed_at)
+                  : "Pending"}
               </strong>
             </span>
           </div>

@@ -8,7 +8,7 @@ celery_app = Celery(
     "geolens",
     broker=settings.redis_url_string,
     backend=settings.redis_url_string,
-    include=["geolens_api.tasks.crawl"],
+    include=["geolens_api.tasks.analysis", "geolens_api.tasks.crawl"],
 )
 celery_app.conf.update(
     accept_content=["json"],

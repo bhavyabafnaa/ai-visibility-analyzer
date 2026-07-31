@@ -1,7 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,22 +34,27 @@ from geolens_api.models.analysis_citation import AnalysisCitation
 from geolens_api.models.analysis_claim import AnalysisClaim
 from geolens_api.models.analysis_entity import AnalysisEntity
 from geolens_api.models.analysis_response import AnalysisResponse
-from geolens_api.models.analysis_run import AnalysisRunStatus
+from geolens_api.models.analysis_run import AnalysisRun, AnalysisRunStatus
 from geolens_api.models.analysis_score import AnalysisScore
 from geolens_api.models.project import Project
 from geolens_api.providers.contract import (
+    Citation,
     Provider,
     ProviderError,
     ProviderResolver,
     ProviderResponse,
     ProviderResponseStatus,
+    TokenUsage,
 )
+from geolens_api.providers.registry import ProviderModelMismatchError
+from geolens_api.queues import AnalysisQueue
 from geolens_api.repositories.analyses import AnalysisRepository
 from geolens_api.schemas.analysis import (
     AnalysisStartRequest,
     AnalysisStartResponse,
     AnalysisStatus,
     PromptExecutionResponse,
+    ProviderModelConfiguration,
 )
 from geolens_api.services.claim_classification import (
     ProviderClaimClassifier,
@@ -77,6 +82,11 @@ class AnalysisNotFoundError(LookupError):
         super().__init__(f"Analysis {analysis_id} was not found")
 
 
+class AnalysisQueueUnavailableError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("The analysis could not be queued")
+
+
 @dataclass
 class _ClaimWork:
     response: AnalysisResponse
@@ -85,73 +95,128 @@ class _ClaimWork:
 
 
 class AnalysisService:
-    """Execute providers, then apply isolated deterministic and model-assisted analysis."""
+    """Queue and execute durable provider-neutral analysis runs."""
 
     def __init__(
         self,
         registry: ProviderResolver,
         session: AsyncSession | None = None,
+        queue: AnalysisQueue | None = None,
     ) -> None:
         self._registry = registry
         self._session = session
         self._repository = AnalysisRepository(session) if session is not None else None
+        self._queue = queue
 
-    async def start(self, data: AnalysisStartRequest) -> AnalysisStartResponse:
+    async def submit(self, data: AnalysisStartRequest) -> AnalysisStartResponse:
         providers = [self._registry.get(name) for name in data.providers]
-        classifier = self._claim_classifier(data)
         project = await self._project_context(data)
-        started_at = datetime.now(timezone.utc)
-        run = None
-        if project is not None:
-            repository = self._required_repository()
-            run = await repository.create_run(
-                project_id=project.id,
-                crawl_job_id=data.crawl_job_id,
-                started_at=started_at,
-            )
+        classifier = (
+            self._registry.get(data.claim_classifier_provider)
+            if data.claim_classifier_provider is not None
+            else None
+        )
+        run = await self._required_repository().create_run(
+            project_id=project.id,
+            crawl_job_id=data.crawl_job_id,
+            provider_configurations=[
+                self._provider_configuration(provider) for provider in providers
+            ],
+            prompts=data.prompts,
+            claim_classifier_configuration=(
+                self._provider_configuration(classifier) if classifier is not None else None
+            ),
+        )
+        await self._required_session().commit()
+
+        try:
+            run.celery_task_id = await asyncio.to_thread(self._required_queue().enqueue, run.id)
+        except Exception:
+            run.status = AnalysisRunStatus.FAILED
+            run.completed_at = datetime.now(timezone.utc)
+            run.error_message = "The analysis could not be queued"
+            await self._required_session().commit()
+            raise AnalysisQueueUnavailableError from None
+        await self._required_session().commit()
+        return await self.get(run.id)
+
+    async def execute(self, analysis_id: UUID) -> None:
+        run = await self._required_repository().get_run(analysis_id)
+        if run is None:
+            raise AnalysisNotFoundError(analysis_id)
+        if run.status not in {AnalysisRunStatus.PENDING, AnalysisRunStatus.RUNNING}:
+            return
+
+        try:
+            providers = [
+                self._resolve_configuration(configuration)
+                for configuration in run.provider_configurations
+            ]
+            classifier = self._classifier_for_run(run)
+            project = await self._required_repository().get_project(run.project_id)
+            if project is None:
+                raise AnalysisProjectNotFoundError(run.project_id)
+
+            await self._required_repository().delete_artifacts(run.id)
+            run.status = AnalysisRunStatus.RUNNING
+            run.started_at = run.started_at or datetime.now(timezone.utc)
+            run.completed_at = None
+            run.error_message = None
             await self._required_session().commit()
 
-        executions = [
-            self._execute(provider, prompt) for provider in providers for prompt in data.prompts
+            executions = [
+                self._execute(provider, prompt) for provider in providers for prompt in run.prompts
+            ]
+            results = await asyncio.gather(*executions)
+            analysis_status = self._analysis_status(results)
+            await self._persist_analysis(
+                run_id=run.id,
+                project=project,
+                crawl_job_id=run.crawl_job_id,
+                results=results,
+                classifier=classifier,
+            )
+            run.status = AnalysisRunStatus(analysis_status.value)
+            run.completed_at = datetime.now(timezone.utc)
+            await self._required_session().commit()
+        except Exception as error:
+            await self._mark_run_failed(run.id, error)
+            raise
+
+    async def get(self, analysis_id: UUID) -> AnalysisStartResponse:
+        run = await self._required_repository().get_run(analysis_id)
+        if run is None:
+            raise AnalysisNotFoundError(analysis_id)
+        await self._required_session().refresh(run)
+        results = [
+            self._prompt_execution_response(response)
+            for response in await self._required_repository().list_responses(analysis_id)
         ]
-        results = await asyncio.gather(*executions)
-        analysis_status = self._analysis_status(results)
-
-        if run is not None and project is not None:
-            try:
-                await self._persist_analysis(
-                    run_id=run.id,
-                    project=project,
-                    crawl_job_id=data.crawl_job_id,
-                    results=results,
-                    classifier=classifier,
-                )
-                run.status = AnalysisRunStatus(analysis_status.value)
-                completed_at = datetime.now(timezone.utc)
-                run.completed_at = completed_at
-                await self._required_session().commit()
-            except Exception:
-                await self._mark_run_failed(run.id)
-                raise
-            analysis_id = run.id
-            persisted = True
-        else:
-            completed_at = datetime.now(timezone.utc)
-            analysis_id = uuid4()
-            persisted = False
-
         return AnalysisStartResponse(
-            analysis_id=analysis_id,
-            status=analysis_status,
-            started_at=started_at,
-            completed_at=completed_at,
+            analysis_id=run.id,
+            project_id=run.project_id,
+            crawl_job_id=run.crawl_job_id,
+            status=AnalysisStatus(run.status.value),
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            error_message=run.error_message,
+            celery_task_id=run.celery_task_id,
+            provider_configurations=[
+                ProviderModelConfiguration.model_validate(configuration)
+                for configuration in run.provider_configurations
+            ],
+            prompts=run.prompts,
+            claim_classifier_configuration=(
+                ProviderModelConfiguration.model_validate(run.claim_classifier_configuration)
+                if run.claim_classifier_configuration is not None
+                else None
+            ),
             results=results,
-            persisted=persisted,
+            created_at=run.created_at,
+            updated_at=run.updated_at,
         )
 
-    async def _project_context(self, data: AnalysisStartRequest) -> Project | None:
-        if data.project_id is None:
-            return None
+    async def _project_context(self, data: AnalysisStartRequest) -> Project:
         repository = self._required_repository()
         project = await repository.get_project(data.project_id)
         if project is None:
@@ -164,10 +229,12 @@ class AnalysisService:
                 raise AnalysisCrawlProjectMismatchError(data.crawl_job_id, project.id)
         return project
 
-    def _claim_classifier(self, data: AnalysisStartRequest) -> ClaimClassifier:
-        if data.claim_classifier_provider is None:
+    def _classifier_for_run(self, run: AnalysisRun) -> ClaimClassifier:
+        if run.claim_classifier_configuration is None:
             return UnconfiguredClaimClassifier()
-        return ProviderClaimClassifier(self._registry.get(data.claim_classifier_provider))
+        return ProviderClaimClassifier(
+            self._resolve_configuration(run.claim_classifier_configuration)
+        )
 
     async def _persist_analysis(
         self,
@@ -271,7 +338,7 @@ class AnalysisService:
             disclaimer=risk.disclaimer,
         )
 
-    async def _mark_run_failed(self, run_id: UUID) -> None:
+    async def _mark_run_failed(self, run_id: UUID, error: Exception) -> None:
         session = self._required_session()
         await session.rollback()
         run = await self._required_repository().get_run(run_id)
@@ -279,7 +346,11 @@ class AnalysisService:
             return
         run.status = AnalysisRunStatus.FAILED
         run.completed_at = datetime.now(timezone.utc)
-        run.error_message = "Analysis processing failed"
+        run.error_message = (
+            str(error)
+            if isinstance(error, ProviderModelMismatchError)
+            else "Analysis processing failed"
+        )
         await session.commit()
 
     def _persist_deterministic_scores(
@@ -422,6 +493,44 @@ class AnalysisService:
             return AnalysisStatus.COMPLETED_WITH_ERRORS
         return AnalysisStatus.FAILED
 
+    @staticmethod
+    def _provider_configuration(provider: Provider) -> dict[str, str]:
+        return {
+            "name": provider.name,
+            "model_identifier": provider.model_identifier,
+        }
+
+    def _resolve_configuration(self, value: dict[str, str]) -> Provider:
+        configuration = ProviderModelConfiguration.model_validate(value)
+        return self._registry.get_exact(configuration.name, configuration.model_identifier)
+
+    @staticmethod
+    def _prompt_execution_response(response: AnalysisResponse) -> PromptExecutionResponse:
+        return PromptExecutionResponse(
+            prompt=response.prompt,
+            provider=response.provider,
+            model_identifier=response.model_identifier,
+            response_text=response.response_text,
+            citations=[
+                Citation(
+                    url=citation.url,
+                    title=citation.title,
+                    start_index=citation.start_index,
+                    end_index=citation.end_index,
+                    cited_text=citation.cited_text,
+                    published_at=citation.published_at,
+                )
+                for citation in sorted(response.citations, key=lambda item: item.ordinal)
+            ],
+            raw_response=response.raw_response,
+            token_usage=TokenUsage.model_validate(response.token_usage),
+            latency_ms=response.latency_ms,
+            status=ProviderResponseStatus(response.status),
+            error=(
+                ProviderError.model_validate(response.error) if response.error is not None else None
+            ),
+        )
+
     def _required_repository(self) -> AnalysisRepository:
         if self._repository is None:
             raise RuntimeError("A database session is required for persisted analysis")
@@ -431,6 +540,11 @@ class AnalysisService:
         if self._session is None:
             raise RuntimeError("A database session is required for persisted analysis")
         return self._session
+
+    def _required_queue(self) -> AnalysisQueue:
+        if self._queue is None:
+            raise RuntimeError("An analysis queue is required for submission")
+        return self._queue
 
 
 class AnalysisResultsService:

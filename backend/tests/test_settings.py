@@ -1,5 +1,5 @@
 import pytest
-from pydantic import AnyHttpUrl, AnyUrl, ValidationError
+from pydantic import AnyHttpUrl, AnyUrl, SecretStr, ValidationError
 from pytest import MonkeyPatch
 
 from geolens_api.config import Settings
@@ -47,3 +47,14 @@ def test_production_rejects_plaintext_provider_endpoints() -> None:
             app_environment="production",
             openai_base_url=AnyHttpUrl("http://provider.internal/v1"),
         )
+
+
+def test_provider_credentials_require_an_explicit_model_identifier() -> None:
+    with pytest.raises(ValidationError, match="OPENAI_MODEL"):
+        Settings(openai_api_key=SecretStr("test-key"), openai_model=None)
+
+
+def test_blank_provider_models_are_allowed_only_without_credentials() -> None:
+    settings = Settings(openai_api_key=None, openai_model=" ")
+
+    assert settings.openai_model is None

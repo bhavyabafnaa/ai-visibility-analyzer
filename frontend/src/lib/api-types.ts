@@ -87,13 +87,27 @@ export interface PromptExecutionResponse {
   error: ProviderError | null;
 }
 
+export interface ProviderModelConfiguration {
+  name: string;
+  model_identifier: string;
+}
+
 export interface AnalysisStartResponse {
   analysis_id: string;
-  status: "succeeded" | "completed_with_errors" | "failed";
-  started_at: string;
-  completed_at: string;
+  project_id: string;
+  crawl_job_id: string | null;
+  status: "pending" | "running" | "succeeded" | "completed_with_errors" | "failed";
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+  celery_task_id: string | null;
+  provider_configurations: ProviderModelConfiguration[];
+  prompts: string[];
+  claim_classifier_configuration: ProviderModelConfiguration | null;
   results: PromptExecutionResponse[];
   persisted: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AnalysisCitationResponse {

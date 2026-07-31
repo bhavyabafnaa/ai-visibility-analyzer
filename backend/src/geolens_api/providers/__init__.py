@@ -14,6 +14,7 @@ from geolens_api.providers.openai import OpenAIProvider
 from geolens_api.providers.perplexity import PerplexityProvider
 from geolens_api.providers.registry import (
     DisabledProvider,
+    ProviderModelMismatchError,
     ProviderRegistry,
     UnknownProviderError,
 )
@@ -21,6 +22,7 @@ from geolens_api.providers.registry import (
 __all__ = [
     "Citation",
     "DisabledProvider",
+    "ProviderModelMismatchError",
     "GeminiProvider",
     "MockFixture",
     "MockProvider",

@@ -2,6 +2,7 @@ from pydantic import SecretStr
 
 from geolens_api.config import Settings
 from geolens_api.providers import (
+    ProviderModelMismatchError,
     ProviderRegistry,
     ProviderResponseStatus,
     UnknownProviderError,
@@ -66,3 +67,16 @@ def test_unknown_provider_is_rejected_instead_of_falling_back() -> None:
         assert str(error) == "Unknown provider: not-a-provider"
     else:
         raise AssertionError("unknown provider should have raised")
+
+
+def test_exact_provider_lookup_rejects_model_drift() -> None:
+    registry = ProviderRegistry.from_settings(Settings(mock_model="configured-model"))
+
+    try:
+        registry.get_exact("mock", "queued-model")
+    except ProviderModelMismatchError as error:
+        assert str(error) == (
+            "Provider mock is configured for model configured-model, not queued model queued-model"
+        )
+    else:
+        raise AssertionError("model drift should have raised")

@@ -54,8 +54,8 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("OPENAI_API_KEY", "GEOLENS_OPENAI_API_KEY"),
     )
-    openai_model: str = Field(
-        default="gpt-5.6",
+    openai_model: str | None = Field(
+        default=None,
         min_length=1,
         validation_alias=AliasChoices("OPENAI_MODEL", "GEOLENS_OPENAI_MODEL"),
     )
@@ -67,8 +67,8 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("GEMINI_API_KEY", "GEOLENS_GEMINI_API_KEY"),
     )
-    gemini_model: str = Field(
-        default="gemini-3.6-flash",
+    gemini_model: str | None = Field(
+        default=None,
         min_length=1,
         validation_alias=AliasChoices("GEMINI_MODEL", "GEOLENS_GEMINI_MODEL"),
     )
@@ -80,8 +80,8 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("PERPLEXITY_API_KEY", "GEOLENS_PERPLEXITY_API_KEY"),
     )
-    perplexity_model: str = Field(
-        default="sonar",
+    perplexity_model: str | None = Field(
+        default=None,
         min_length=1,
         validation_alias=AliasChoices("PERPLEXITY_MODEL", "GEOLENS_PERPLEXITY_MODEL"),
     )
@@ -110,6 +110,32 @@ class Settings(BaseSettings):
             return url.replace("postgresql://", "postgresql+asyncpg://", 1)
         return value
 
+    @field_validator("openai_model", "gemini_model", "perplexity_model", mode="before")
+    @classmethod
+    def normalize_optional_provider_models(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
+    @model_validator(mode="after")
+    def require_models_for_configured_provider_credentials(self) -> "Settings":
+        missing = [
+            model_name
+            for model_name, credential, model in (
+                ("OPENAI_MODEL", self.openai_api_key, self.openai_model),
+                ("GEMINI_MODEL", self.gemini_api_key, self.gemini_model),
+                ("PERPLEXITY_MODEL", self.perplexity_api_key, self.perplexity_model),
+            )
+            if self._has_credential(credential) and model is None
+        ]
+        if missing:
+            raise ValueError(
+                "provider model identifiers are required when credentials are configured: "
+                + ", ".join(missing)
+            )
+        return self
+
     @model_validator(mode="after")
     def require_secure_production_provider_endpoints(self) -> "Settings":
         if self.app_environment != "production":
@@ -126,6 +152,10 @@ class Settings(BaseSettings):
         if insecure:
             raise ValueError("production provider base URLs must use HTTPS: " + ", ".join(insecure))
         return self
+
+    @staticmethod
+    def _has_credential(secret: SecretStr | None) -> bool:
+        return secret is not None and bool(secret.get_secret_value().strip())
 
     @property
     def database_url_string(self) -> str:

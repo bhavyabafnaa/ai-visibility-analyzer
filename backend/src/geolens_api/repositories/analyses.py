@@ -1,7 +1,6 @@
-from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -57,13 +56,17 @@ class AnalysisRepository:
         *,
         project_id: UUID,
         crawl_job_id: UUID | None,
-        started_at: datetime,
+        provider_configurations: list[dict[str, str]],
+        prompts: list[str],
+        claim_classifier_configuration: dict[str, str] | None,
     ) -> AnalysisRun:
         run = AnalysisRun(
             project_id=project_id,
             crawl_job_id=crawl_job_id,
-            status=AnalysisRunStatus.RUNNING,
-            started_at=started_at,
+            status=AnalysisRunStatus.PENDING,
+            provider_configurations=provider_configurations,
+            prompts=prompts,
+            claim_classifier_configuration=claim_classifier_configuration,
         )
         self._session.add(run)
         await self._session.flush()
@@ -223,6 +226,23 @@ class AnalysisRepository:
 
     async def get_run(self, analysis_id: UUID) -> AnalysisRun | None:
         return await self._session.get(AnalysisRun, analysis_id)
+
+    async def list_responses(self, analysis_id: UUID) -> list[AnalysisResponse]:
+        statement = (
+            select(AnalysisResponse)
+            .where(AnalysisResponse.analysis_run_id == analysis_id)
+            .options(selectinload(AnalysisResponse.citations))
+            .order_by(AnalysisResponse.ordinal)
+        )
+        return list((await self._session.scalars(statement)).all())
+
+    async def delete_artifacts(self, analysis_id: UUID) -> None:
+        await self._session.execute(
+            delete(AnalysisScore).where(AnalysisScore.analysis_run_id == analysis_id)
+        )
+        await self._session.execute(
+            delete(AnalysisResponse).where(AnalysisResponse.analysis_run_id == analysis_id)
+        )
 
     async def list_citations(self, analysis_id: UUID) -> list[AnalysisCitation]:
         statement = (

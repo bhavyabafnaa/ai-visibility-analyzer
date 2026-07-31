@@ -71,3 +71,12 @@ def test_all_timestamps_are_timezone_aware() -> None:
 
             assert isinstance(timestamp.type, DateTime)
             assert timestamp.type.timezone
+
+
+def test_analysis_runs_persist_the_exact_queued_execution_configuration() -> None:
+    columns = AnalysisRun.__table__.c
+
+    assert columns.provider_configurations.nullable is False
+    assert columns.prompts.nullable is False
+    assert columns.claim_classifier_configuration.nullable is True
+    assert columns.celery_task_id.nullable is True

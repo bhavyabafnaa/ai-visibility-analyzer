@@ -3,7 +3,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -50,6 +50,14 @@ class AnalysisRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[str | None] = mapped_column(Text)
+    celery_task_id: Mapped[str | None] = mapped_column(String(255))
+    provider_configurations: Mapped[list[dict[str, str]]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+    )
+    prompts: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    claim_classifier_configuration: Mapped[dict[str, str] | None] = mapped_column(JSON)
 
     project: Mapped["Project"] = relationship(back_populates="analysis_runs")
     crawl_job: Mapped["CrawlJob | None"] = relationship(back_populates="analysis_runs")

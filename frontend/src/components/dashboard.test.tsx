@@ -106,11 +106,20 @@ function crawlJob(
 function completedAnalysis(id = "99999999-9999-4999-8999-999999999999"): AnalysisStartResponse {
   return {
     analysis_id: id,
+    project_id: project.id,
+    crawl_job_id: null,
     status: "succeeded",
     started_at: "2026-07-30T09:00:00Z",
     completed_at: "2026-07-30T09:00:01Z",
+    error_message: null,
+    celery_task_id: "analysis-task-1",
+    provider_configurations: [{ name: "mock", model_identifier: "mock-v1" }],
+    prompts: [],
+    claim_classifier_configuration: null,
     persisted: false,
     results: [],
+    created_at: "2026-07-30T09:00:00Z",
+    updated_at: "2026-07-30T09:00:01Z",
   };
 }
 
@@ -168,12 +177,18 @@ describe("Dashboard", () => {
   });
 
   it("runs the query matrix and renders recommendations from calculated evidence", async () => {
-    const user = userEvent.setup();
     const analysis: AnalysisStartResponse = {
       analysis_id: "44444444-4444-4444-8444-444444444444",
+      project_id: project.id,
+      crawl_job_id: null,
       status: "succeeded",
       started_at: "2026-07-30T09:00:00.000Z",
       completed_at: "2026-07-30T09:00:00.025Z",
+      error_message: null,
+      celery_task_id: "analysis-task-1",
+      provider_configurations: [{ name: "mock", model_identifier: "mock-v1" }],
+      prompts: [],
+      claim_classifier_configuration: null,
       persisted: true,
       results: [
         {
@@ -231,6 +246,16 @@ describe("Dashboard", () => {
           error: null,
         },
       ],
+      created_at: "2026-07-30T09:00:00.000Z",
+      updated_at: "2026-07-30T09:00:00.025Z",
+    };
+    const queuedAnalysis: AnalysisStartResponse = {
+      ...analysis,
+      status: "pending",
+      started_at: null,
+      completed_at: null,
+      results: [],
+      updated_at: analysis.created_at,
     };
     const claims: AnalysisClaimResponse[] = [
       {
@@ -263,12 +288,21 @@ describe("Dashboard", () => {
       },
     ];
 
+    let analysisStatusReads = 0;
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/geolens/projects")) return response([project]);
       if (url.endsWith("/api/geolens/providers")) return response(providers);
       if (url.endsWith("/api/geolens/analyses") && init?.method === "POST") {
-        return response(analysis, 201);
+        return response(queuedAnalysis, 202);
+      }
+      if (url.endsWith(`/api/geolens/analyses/${analysis.analysis_id}`)) {
+        analysisStatusReads += 1;
+        return response(
+          analysisStatusReads === 1
+            ? { ...queuedAnalysis, status: "running", started_at: analysis.started_at }
+            : analysis,
+        );
       }
       if (url.endsWith("/citations")) return response([]);
       if (url.endsWith("/entities")) return response([]);
@@ -285,10 +319,25 @@ describe("Dashboard", () => {
       screen.getByText(/The seeded demo uses a non-routable example domain/),
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "Crawl website" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Run analysis" }));
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Run analysis" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "Analyzing…" })).toBeDisabled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(analysisStatusReads).toBe(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(analysisStatusReads).toBe(2);
 
     expect(
-      await screen.findByText("Analysis completed and evidence is ready"),
+      screen.getByText("Analysis completed and evidence is ready"),
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Ranked GEO recommendations" })).toBeVisible();
     expect(
@@ -297,14 +346,12 @@ describe("Dashboard", () => {
     expect(screen.getAllByText("Provider evidence")[0]).toBeVisible();
     expect(screen.getAllByText("Expected metric")[0]).toBeVisible();
 
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/geolens/analyses",
-        expect.objectContaining({
-          method: "POST",
-        }),
-      );
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/geolens/analyses",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
 
     const analysisCall = fetchMock.mock.calls.find(([input, init]) =>
       String(input).endsWith("/api/geolens/analyses") && init?.method === "POST",

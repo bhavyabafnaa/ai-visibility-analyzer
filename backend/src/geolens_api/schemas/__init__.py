@@ -25,6 +25,7 @@ __all__ = [
     "ProjectCreate",
     "ProjectResponse",
     "PromptExecutionResponse",
+    "ProviderModelConfiguration",
     "ProviderAvailabilityResponse",
     "ReadinessResponse",
     "SiteCreate",
@@ -40,4 +41,5 @@ from geolens_api.schemas.analysis import (
     AnalysisStatus,
     PromptExecutionResponse,
     ProviderAvailabilityResponse,
+    ProviderModelConfiguration,
 )

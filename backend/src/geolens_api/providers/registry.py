@@ -23,6 +23,19 @@ class UnknownProviderError(LookupError):
         self.provider_name = provider_name
 
 
+class ProviderModelMismatchError(ValueError):
+    def __init__(
+        self,
+        provider_name: str,
+        expected_model: str,
+        configured_model: str,
+    ) -> None:
+        super().__init__(
+            f"Provider {provider_name} is configured for model {configured_model}, "
+            f"not queued model {expected_model}"
+        )
+
+
 class DisabledProvider:
     """Explicit provider placeholder used when its credential is absent."""
 
@@ -98,7 +111,7 @@ class ProviderRegistry:
             providers.append(
                 DisabledProvider(
                     name="openai",
-                    model_identifier=settings.openai_model,
+                    model_identifier=settings.openai_model or "not-configured",
                     reason="OPENAI_API_KEY is not configured",
                 )
             )
@@ -107,7 +120,7 @@ class ProviderRegistry:
             clients.append(client)
             providers.append(
                 OpenAIProvider(
-                    model_identifier=settings.openai_model,
+                    model_identifier=cls._required_model(settings.openai_model, "OPENAI_MODEL"),
                     api_key=openai_key,
                     client=client,
                     base_url=str(settings.openai_base_url),
@@ -120,7 +133,7 @@ class ProviderRegistry:
             providers.append(
                 DisabledProvider(
                     name="gemini",
-                    model_identifier=settings.gemini_model,
+                    model_identifier=settings.gemini_model or "not-configured",
                     reason="GEMINI_API_KEY is not configured",
                 )
             )
@@ -129,7 +142,7 @@ class ProviderRegistry:
             clients.append(client)
             providers.append(
                 GeminiProvider(
-                    model_identifier=settings.gemini_model,
+                    model_identifier=cls._required_model(settings.gemini_model, "GEMINI_MODEL"),
                     api_key=gemini_key,
                     client=client,
                     base_url=str(settings.gemini_base_url),
@@ -142,7 +155,7 @@ class ProviderRegistry:
             providers.append(
                 DisabledProvider(
                     name="perplexity",
-                    model_identifier=settings.perplexity_model,
+                    model_identifier=settings.perplexity_model or "not-configured",
                     reason="PERPLEXITY_API_KEY is not configured",
                 )
             )
@@ -151,7 +164,10 @@ class ProviderRegistry:
             clients.append(client)
             providers.append(
                 PerplexityProvider(
-                    model_identifier=settings.perplexity_model,
+                    model_identifier=cls._required_model(
+                        settings.perplexity_model,
+                        "PERPLEXITY_MODEL",
+                    ),
                     api_key=perplexity_key,
                     client=client,
                     base_url=str(settings.perplexity_base_url),
@@ -166,6 +182,16 @@ class ProviderRegistry:
             return self._providers[provider_name]
         except KeyError as error:
             raise UnknownProviderError(provider_name) from error
+
+    def get_exact(self, provider_name: str, model_identifier: str) -> Provider:
+        provider = self.get(provider_name)
+        if provider.model_identifier != model_identifier:
+            raise ProviderModelMismatchError(
+                provider_name,
+                model_identifier,
+                provider.model_identifier,
+            )
+        return provider
 
     def availability(self) -> list[ProviderAvailability]:
         return [
@@ -189,3 +215,9 @@ class ProviderRegistry:
             return None
         value = str(get_secret_value()).strip()
         return value or None
+
+    @staticmethod
+    def _required_model(value: str | None, setting_name: str) -> str:
+        if value is None:
+            raise ValueError(f"{setting_name} is required for the configured provider")
+        return value
