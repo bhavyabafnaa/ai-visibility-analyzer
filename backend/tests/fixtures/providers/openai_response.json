@@ -1,0 +1,47 @@
+{
+  "id": "resp_fixture_openai",
+  "model": "gpt-fixture",
+  "status": "completed",
+  "output": [
+    {
+      "type": "web_search_call",
+      "id": "ws_fixture",
+      "status": "completed",
+      "action": {
+        "type": "search",
+        "queries": ["GeoLens AI visibility"]
+      }
+    },
+    {
+      "type": "message",
+      "role": "assistant",
+      "status": "completed",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "GeoLens tracks brand visibility.",
+          "annotations": [
+            {
+              "type": "url_citation",
+              "url": "https://example.com/openai-source",
+              "title": "OpenAI fixture source",
+              "start_index": 0,
+              "end_index": 14
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 10,
+    "input_tokens_details": {
+      "cached_tokens": 2
+    },
+    "output_tokens": 7,
+    "output_tokens_details": {
+      "reasoning_tokens": 1
+    },
+    "total_tokens": 17
+  }
+}

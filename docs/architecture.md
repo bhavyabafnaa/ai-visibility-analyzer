@@ -1,0 +1,172 @@
+# GeoLens architecture
+
+## Status and scope
+
+This document describes the 0.1.0 release-candidate topology: project persistence, secure crawl
+pipeline, provider-neutral prompt execution, deterministic measurements, opt-in model-assisted
+claim classification, and the evidence dashboard. Authentication and multi-tenant isolation are
+not implemented.
+
+## System context
+
+```mermaid
+flowchart LR
+    User[Browser] --> Web[Next.js frontend and same-origin proxy]
+    Web --> API[FastAPI API]
+    API --> DB[(PostgreSQL)]
+    API --> Queue[(Redis)]
+    API --> Providers[AI and search providers]
+    Queue --> Worker[Celery worker]
+    Worker --> DB
+    Worker --> Site[Authorized public website]
+```
+
+Provider keys cross only the API-to-provider boundary. User-supplied crawl targets cross only the
+worker-to-website boundary after URL validation, public-address resolution, and address pinning.
+
+## Components
+
+### Frontend
+
+The Next.js TypeScript application owns browser-facing onboarding, provider/query launch
+controls, evidence tables, deterministic metric presentation, claim review, and ranked
+recommendations. Browser calls use the same-origin `/api/geolens` route. The Next.js server reads
+the server-only `GEOLENS_API_URL`; no provider key is a public frontend variable.
+
+### Backend
+
+The FastAPI application owns the HTTP API boundary. It exposes:
+
+- `GET /health` for process health
+- `GET /ready` for PostgreSQL readiness
+- `POST /projects` to create a project aggregate
+- `GET /projects/{project_id}` to retrieve a project
+- `GET /projects` to list projects
+- `POST /sites/{site_id}/crawls` to validate a site and queue a crawl
+- `GET /crawls/{crawl_id}` to read crawl status and result counts
+- `GET /providers` to report enabled and disabled backend providers
+- `POST /analyses` to execute selected providers against selected prompts
+- `GET /analyses/{analysis_id}/citations` for persisted normalized citations
+- `GET /analyses/{analysis_id}/entities` for mention and entity extraction results
+- `GET /analyses/{analysis_id}/scores` for deterministic metrics and disclosed claim risk
+- `GET /analyses/{analysis_id}/claims` for claim assessments and evidence references
+- FastAPI's generated OpenAPI schema and documentation
+
+Routes validate and serialize HTTP data, services coordinate use cases and transactions, and
+repositories own SQLAlchemy queries. The package uses a `src` layout so imports resolve from
+the installed application rather than the repository working directory.
+
+### Provider adapters
+
+Provider clients are created during the backend application lifespan and never exposed to the
+frontend. A neutral contract carries provider and model identifiers, response text, normalized
+citations, raw JSON, token usage, latency, status, and structured errors. Analysis orchestration
+depends only on that contract.
+
+`MockProvider` supplies deterministic recorded and synthetic results. OpenAI uses the Responses
+API with hosted web search, Gemini uses the Interactions API with Google Search, and Perplexity
+uses Sonar. Each adapter owns its request and citation parsing at the infrastructure edge. Shared
+HTTP behavior enforces timeouts, bounded retries, exponential backoff, `Retry-After` handling,
+and explicit terminal rate-limit errors.
+
+Missing credentials install a disabled placeholder under that provider's own name. Selecting it
+returns a disabled result; the registry never routes the request to another provider. The
+analysis endpoint runs the provider/prompt matrix concurrently and returns results in stable
+provider-then-prompt order.
+
+Supplying `project_id` persists the provider responses and runs deterministic analysis.
+Supplying `crawl_job_id` adds the selected crawl's page text to the evidence set. Supplying
+`claim_classifier_provider` explicitly enables model-assisted claim classification; there is no
+implicit classifier call.
+
+### Analysis boundaries
+
+The framework-independent `geolens_api.analysis` package owns alias matching, normalized
+citation domains, mention position, entity extraction, evidence retrieval, deterministic metric
+formulas, and deterministic aggregation of claim labels. It does not import FastAPI,
+SQLAlchemy, Redis, or provider adapters.
+
+The claim-classifier protocol is the boundary between those deterministic rules and model
+judgment. A provider adapter classifies only a segmented claim against retrieved evidence.
+Persistence stores the classifier/provider identity, confidence, explanation, and evidence
+references. Aggregate claim risk is explicitly disclosed as a model-assisted estimate and
+never as objective truth.
+
+### PostgreSQL
+
+PostgreSQL stores projects, their primary sites and competitors, crawl-job and analysis-run
+lifecycle records, provider responses, normalized citations, entity mentions, scores, claims,
+claim evidence, extracted crawl pages, and per-URL crawl errors. SQLAlchemy provides
+asynchronous sessions through `asyncpg`; Alembic owns schema migrations. Primary keys are
+UUIDs and all timestamps are timezone-aware.
+
+### Crawler and worker
+
+Redis is the Celery broker and result backend. The API commits a pending crawl job before
+enqueuing its UUID. A worker marks it running, crawls with HTTPX, persists extracted pages and
+errors, and records terminal counts and status.
+
+The crawler resolves and pins public IP addresses before connecting, revalidates redirects,
+stays on the exact configured hostname, parses robots and sitemaps, and streams bounded
+responses. Sitemap URLs have deterministic priority over link-discovered URLs. Page work is
+processed in stable batches so concurrency cannot change the selected page set. Canonical
+identities and normalized URLs are deduplicated.
+
+HTML extraction stores canonical URL, title, description, headings, main text, JSON-LD,
+internal links, and a SHA-256 hash of the fetched content. JavaScript rendering is optional
+behind an interface whose implementations must enforce the same hostname, address, timeout,
+and size policies; Playwright is not installed by default.
+
+## Runtime topology
+
+Docker Compose supplies one container for each component and health checks for PostgreSQL,
+Redis, API, worker, and frontend. PostgreSQL and Redis readiness gate the API. The API entrypoint
+runs `alembic upgrade head` before starting Uvicorn. API database readiness gates the worker and
+frontend, so queued work cannot begin against an unmigrated schema.
+
+The `/health` response means only that the API process can serve HTTP. `/ready` executes a
+database query and returns HTTP 503 while PostgreSQL is unavailable. A Redis failure during
+crawl creation is surfaced as HTTP 503 and persisted on the crawl job.
+
+The API and worker use the same backend image and run as an unprivileged application user. Only
+the API enables startup migrations. This is safe for the single-API Compose topology; a scaled
+deployment needs one external serialized migration job.
+
+## Configuration
+
+Configuration is passed through environment variables. `.env.example` contains local,
+non-sensitive defaults and may be copied to `.env`. Real secrets must never be committed.
+Provider model names, API keys, request timeouts, retry limits, and backoff caps are configured
+through environment variables. Empty provider keys disable their provider. Secrets have no
+checked-in values.
+
+## Dependency direction
+
+Code should preserve these boundaries:
+
+```text
+HTTP/UI adapters -> application use cases -> domain definitions
+                                |
+                                v
+                     infrastructure adapters
+```
+
+Framework and provider objects should remain at the edges. Domain metric definitions should
+not depend on FastAPI, Next.js, a model provider, PostgreSQL, or Redis.
+
+## Crawl configuration
+
+Crawler limits use `GEOLENS_CRAWLER_*` environment variables. The checked-in example covers
+page count, depth, decoded response bytes, total request timeout, in-crawl concurrency,
+redirect count, sitemap count, renderer fallback threshold, and user agent.
+
+## Deferred decisions
+
+The following choices require business requirements and are intentionally open:
+
+- authentication, authorization, and tenant isolation
+- observability and deployment platform
+- API versioning and generated client strategy
+- aggregation windows beyond a single persisted analysis run
+- historical-run navigation and scheduled execution
+- a renderer implementation that applies the crawler SSRF policy to every subresource
