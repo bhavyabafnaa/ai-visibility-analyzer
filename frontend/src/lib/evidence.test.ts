@@ -8,6 +8,7 @@ import type {
 } from "./api-types";
 import {
   buildDashboardEvidence,
+  isReservedExampleUrl,
   normalizeDomain,
   safeExternalUrl,
 } from "./evidence";
@@ -82,6 +83,14 @@ describe("dashboard evidence normalization", () => {
       "https://example.com/evidence",
     );
     expect(safeExternalUrl("javascript:alert(1)")).toBeNull();
+  });
+
+  it("identifies only parsed example hostnames as reserved demo URLs", () => {
+    expect(isReservedExampleUrl("https://example/path")).toBe(true);
+    expect(isReservedExampleUrl("https://acme.example/path")).toBe(true);
+    expect(isReservedExampleUrl("https://acme.example./path")).toBe(true);
+    expect(isReservedExampleUrl("https://example.com/acme.example")).toBe(false);
+    expect(isReservedExampleUrl("https://notexample/path")).toBe(false);
   });
 
   it("does not present unconfigured claims as model-assisted risk", () => {

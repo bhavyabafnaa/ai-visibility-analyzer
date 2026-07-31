@@ -1,10 +1,11 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   AnalysisClaimResponse,
   AnalysisStartResponse,
+  CrawlJobResponse,
   ProjectResponse,
   ProviderAvailabilityResponse,
 } from "@/lib/api-types";
@@ -52,6 +53,67 @@ const project: ProjectResponse = {
   updated_at: "2026-07-30T08:00:00Z",
 };
 
+const publicProject: ProjectResponse = {
+  ...project,
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  name: "Orbit Labs",
+  aliases: ["Orbit"],
+  site: {
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    project_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    url: "https://orbitlabs.com/",
+    created_at: "2026-07-30T08:00:00Z",
+    updated_at: "2026-07-30T08:00:00Z",
+  },
+};
+
+const secondProject: ProjectResponse = {
+  ...project,
+  id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  name: "Summit Labs",
+  aliases: ["Summit"],
+  site: {
+    id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    project_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    url: "https://summitlabs.com/",
+    created_at: "2026-07-30T08:00:00Z",
+    updated_at: "2026-07-30T08:00:00Z",
+  },
+};
+
+function crawlJob(
+  status: CrawlJobResponse["status"],
+  overrides: Partial<CrawlJobResponse> = {},
+): CrawlJobResponse {
+  return {
+    id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    site_id: publicProject.site!.id,
+    status,
+    started_at: status === "pending" ? null : "2026-07-30T08:01:00Z",
+    completed_at: ["succeeded", "failed"].includes(status)
+      ? "2026-07-30T08:01:05Z"
+      : null,
+    error_message: null,
+    celery_task_id: "crawl-task-1",
+    page_count: status === "succeeded" ? 7 : 0,
+    error_count: status === "succeeded" ? 2 : 0,
+    created_at: "2026-07-30T08:00:59Z",
+    updated_at: "2026-07-30T08:01:05Z",
+    ...overrides,
+  };
+}
+
+function completedAnalysis(id = "99999999-9999-4999-8999-999999999999"): AnalysisStartResponse {
+  return {
+    analysis_id: id,
+    status: "succeeded",
+    started_at: "2026-07-30T09:00:00Z",
+    completed_at: "2026-07-30T09:00:01Z",
+    persisted: false,
+    results: [],
+  };
+}
+
 function response(body: unknown, status = 200) {
   return Promise.resolve(
     new Response(JSON.stringify(body), {
@@ -63,6 +125,7 @@ function response(body: unknown, status = 200) {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -218,6 +281,10 @@ describe("Dashboard", () => {
     render(<Dashboard />);
 
     expect(await screen.findByRole("heading", { name: "Acme Cloud overview" })).toBeVisible();
+    expect(
+      screen.getByText(/The seeded demo uses a non-routable example domain/),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Crawl website" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Run analysis" }));
 
     expect(
@@ -238,5 +305,378 @@ describe("Dashboard", () => {
         }),
       );
     });
+
+    const analysisCall = fetchMock.mock.calls.find(([input, init]) =>
+      String(input).endsWith("/api/geolens/analyses") && init?.method === "POST",
+    );
+    const analysisBody = JSON.parse(String(analysisCall?.[1]?.body)) as Record<string, unknown>;
+    expect(analysisBody.providers).toEqual(["mock"]);
+    expect(analysisBody).not.toHaveProperty("crawl_job_id");
+    expect(screen.getByText("Analysis ran without website crawl evidence")).toBeVisible();
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).includes("/crawls")),
+    ).toBe(false);
+  });
+
+  it("uses the active site ID, polls pending and running states, stops at success, and attaches the crawl", async () => {
+    let statusReads = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/geolens/projects")) return response([publicProject]);
+      if (url.endsWith("/api/geolens/providers")) return response(providers);
+      if (url.endsWith(`/sites/${publicProject.site!.id}/crawls/latest`)) {
+        return response(null);
+      }
+      if (
+        url.endsWith(`/api/geolens/sites/${publicProject.site!.id}/crawls`) &&
+        init?.method === "POST"
+      ) {
+        return response(crawlJob("pending"), 202);
+      }
+      if (url.endsWith("/api/geolens/crawls/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")) {
+        statusReads += 1;
+        return response(statusReads === 1 ? crawlJob("running") : crawlJob("succeeded"));
+      }
+      if (url.endsWith("/api/geolens/analyses") && init?.method === "POST") {
+        return response(completedAnalysis(), 201);
+      }
+      return response({ detail: `Unexpected request: ${url}` }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Dashboard />);
+    expect(await screen.findByRole("heading", { name: "Orbit Labs overview" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Crawl website" })).toBeEnabled();
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Crawl website" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Crawl queued")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Crawl in progress" })).toBeDisabled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/geolens/sites/${publicProject.site!.id}/crawls`,
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(screen.getByText("Crawling website")).toBeVisible();
+    expect(statusReads).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(screen.getByText("Website crawl succeeded")).toBeVisible();
+    expect(screen.getByText("Pages crawled").parentElement).toHaveTextContent("7");
+    expect(screen.getByText("Errors").parentElement).toHaveTextContent("2");
+    expect(statusReads).toBe(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(statusReads).toBe(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Run analysis" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const analysisCall = fetchMock.mock.calls.find(([input, init]) =>
+      String(input).endsWith("/api/geolens/analyses") && init?.method === "POST",
+    );
+    const analysisBody = JSON.parse(String(analysisCall?.[1]?.body)) as Record<string, unknown>;
+    expect(analysisBody.crawl_job_id).toBe("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee");
+    expect(screen.getByText(/Website evidence attached.+7 pages/)).toBeVisible();
+  });
+
+  it("shows a failed crawl error and omits the failed crawl from analysis", async () => {
+    const failed = crawlJob("failed", {
+      error_message: "Robots policy prevented the crawl.",
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/geolens/projects")) return response([publicProject]);
+      if (url.endsWith("/api/geolens/providers")) return response(providers);
+      if (url.endsWith(`/sites/${publicProject.site!.id}/crawls/latest`)) {
+        return response(null);
+      }
+      if (url.endsWith("/crawls") && init?.method === "POST") return response(failed, 202);
+      if (url.endsWith("/api/geolens/analyses") && init?.method === "POST") {
+        return response(completedAnalysis(), 201);
+      }
+      return response({ detail: `Unexpected request: ${url}` }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<Dashboard />);
+    expect(await screen.findByRole("heading", { name: "Orbit Labs overview" })).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "Crawl website" }));
+
+    expect(await screen.findByText("Website crawl failed")).toBeVisible();
+    expect(screen.getByText("Robots policy prevented the crawl.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Run analysis" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Analysis ran without website crawl evidence")).toBeVisible();
+    });
+    const analysisCall = fetchMock.mock.calls.find(([input, init]) =>
+      String(input).endsWith("/api/geolens/analyses") && init?.method === "POST",
+    );
+    const analysisBody = JSON.parse(String(analysisCall?.[1]?.body)) as Record<string, unknown>;
+    expect(analysisBody).not.toHaveProperty("crawl_job_id");
+  });
+
+  it("clears crawl evidence when switching away and recovers it when switching back", async () => {
+    let publicSiteHasCrawl = false;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/geolens/projects")) {
+        return response([publicProject, secondProject]);
+      }
+      if (url.endsWith("/api/geolens/providers")) return response(providers);
+      if (url.endsWith(`/sites/${publicProject.site!.id}/crawls/latest`)) {
+        return response(publicSiteHasCrawl ? crawlJob("succeeded") : null);
+      }
+      if (url.endsWith(`/sites/${secondProject.site!.id}/crawls/latest`)) {
+        return response(null);
+      }
+      if (url.endsWith("/crawls") && init?.method === "POST") {
+        publicSiteHasCrawl = true;
+        return response(crawlJob("succeeded"), 202);
+      }
+      if (url.endsWith("/api/geolens/analyses") && init?.method === "POST") {
+        return response(completedAnalysis(), 201);
+      }
+      return response({ detail: `Unexpected request: ${url}` }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<Dashboard />);
+    expect(await screen.findByRole("heading", { name: "Orbit Labs overview" })).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "Crawl website" }));
+    expect(await screen.findByText("Website crawl succeeded")).toBeVisible();
+
+    await user.selectOptions(screen.getByLabelText("Active project"), secondProject.id);
+    expect(screen.getByRole("heading", { name: "Summit Labs overview" })).toBeVisible();
+    expect(screen.queryByText("Website crawl succeeded")).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Crawl website" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Run analysis" }));
+    await waitFor(() => {
+      expect(screen.getByText("Analysis ran without website crawl evidence")).toBeVisible();
+    });
+    const analysisCall = fetchMock.mock.calls.find(([input, init]) =>
+      String(input).endsWith("/api/geolens/analyses") && init?.method === "POST",
+    );
+    const analysisBody = JSON.parse(String(analysisCall?.[1]?.body)) as Record<string, unknown>;
+    expect(analysisBody.project_id).toBe(secondProject.id);
+    expect(analysisBody).not.toHaveProperty("crawl_job_id");
+
+    await user.selectOptions(screen.getByLabelText("Active project"), publicProject.id);
+    expect(screen.getByRole("heading", { name: "Orbit Labs overview" })).toBeVisible();
+    expect(await screen.findByText("Website crawl succeeded")).toBeVisible();
+    expect(screen.getByText("Pages crawled").parentElement).toHaveTextContent("7");
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/geolens/sites/${publicProject.site!.id}/crawls/latest`,
+      expect.anything(),
+    );
+  });
+
+  it("recovers a persisted successful crawl on dashboard load", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/geolens/projects")) return response([publicProject]);
+      if (url.endsWith("/api/geolens/providers")) return response(providers);
+      if (url.endsWith(`/sites/${publicProject.site!.id}/crawls/latest`)) {
+        return response(crawlJob("succeeded"));
+      }
+      return response({ detail: `Unexpected request: ${url}` }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Dashboard />);
+
+    expect(await screen.findByText("Website crawl succeeded")).toBeVisible();
+    expect(screen.getByText("Pages crawled").parentElement).toHaveTextContent("7");
+    expect(screen.getByText("Errors").parentElement).toHaveTextContent("2");
+  });
+
+  it("recovers a persisted failed crawl and its counts on dashboard load", async () => {
+    const failed = crawlJob("failed", {
+      error_message: "The website timed out.",
+      page_count: 3,
+      error_count: 4,
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/geolens/projects")) return response([publicProject]);
+      if (url.endsWith("/api/geolens/providers")) return response(providers);
+      if (url.endsWith(`/sites/${publicProject.site!.id}/crawls/latest`)) {
+        return response(failed);
+      }
+      return response({ detail: `Unexpected request: ${url}` }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Dashboard />);
+
+    expect(await screen.findByText("Website crawl failed")).toBeVisible();
+    expect(screen.getByText("The website timed out.")).toBeVisible();
+    expect(screen.getByText("Pages crawled").parentElement).toHaveTextContent("3");
+    expect(screen.getByText("Errors").parentElement).toHaveTextContent("4");
+  });
+
+  it("shows an empty crawl state when the active project has no crawl", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/geolens/projects")) return response([publicProject]);
+      if (url.endsWith("/api/geolens/providers")) return response(providers);
+      if (url.endsWith(`/sites/${publicProject.site!.id}/crawls/latest`)) {
+        return response(null);
+      }
+      return response({ detail: `Unexpected request: ${url}` }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Dashboard />);
+
+    expect(await screen.findByRole("button", { name: "Crawl website" })).toBeEnabled();
+    expect(screen.getByText("Use website text as optional evidence")).toBeVisible();
+    expect(screen.queryByText("Website crawl succeeded")).not.toBeInTheDocument();
+  });
+
+  it.each(["pending", "running"] as const)(
+    "continues polling after recovering a %s crawl",
+    async (recoveredStatus) => {
+      let resolveLatest!: (response: Response) => void;
+      const latestResponse = new Promise<Response>((resolve) => {
+        resolveLatest = resolve;
+      });
+      let statusReads = 0;
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/geolens/projects")) return response([publicProject]);
+        if (url.endsWith("/api/geolens/providers")) return response(providers);
+        if (url.endsWith(`/sites/${publicProject.site!.id}/crawls/latest`)) {
+          return latestResponse;
+        }
+        if (url.endsWith("/api/geolens/crawls/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")) {
+          statusReads += 1;
+          return response(crawlJob("succeeded"));
+        }
+        return response({ detail: `Unexpected request: ${url}` }, 500);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<Dashboard />);
+      expect(await screen.findByRole("heading", { name: "Orbit Labs overview" })).toBeVisible();
+      vi.useFakeTimers();
+      await act(async () => {
+        resolveLatest(await response(crawlJob(recoveredStatus)));
+        await Promise.resolve();
+      });
+
+      expect(
+        screen.getByText(recoveredStatus === "pending" ? "Crawl queued" : "Crawling website"),
+      ).toBeVisible();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      expect(screen.getByText("Website crawl succeeded")).toBeVisible();
+      expect(statusReads).toBe(1);
+    },
+  );
+
+  it("cancels scheduled crawl polling when the dashboard unmounts", async () => {
+    let statusReads = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/geolens/projects")) return response([publicProject]);
+      if (url.endsWith("/api/geolens/providers")) return response(providers);
+      if (url.endsWith(`/sites/${publicProject.site!.id}/crawls/latest`)) {
+        return response(null);
+      }
+      if (url.endsWith("/crawls") && init?.method === "POST") {
+        return response(crawlJob("pending"), 202);
+      }
+      if (url.includes("/api/geolens/crawls/")) {
+        statusReads += 1;
+        return response(crawlJob("running"));
+      }
+      return response({ detail: `Unexpected request: ${url}` }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const rendered = render(<Dashboard />);
+    expect(await screen.findByRole("heading", { name: "Orbit Labs overview" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Crawl website" })).toBeEnabled();
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Crawl website" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Crawl queued")).toBeVisible();
+
+    rendered.unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(statusReads).toBe(0);
+  });
+
+  it("preserves polling errors and lets the user retry the status request", async () => {
+    let statusReads = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/geolens/projects")) return response([publicProject]);
+      if (url.endsWith("/api/geolens/providers")) return response(providers);
+      if (url.endsWith(`/sites/${publicProject.site!.id}/crawls/latest`)) {
+        return response(null);
+      }
+      if (url.endsWith("/crawls") && init?.method === "POST") {
+        return response(crawlJob("pending"), 202);
+      }
+      if (url.includes("/api/geolens/crawls/")) {
+        statusReads += 1;
+        return statusReads === 1
+          ? response({ detail: "Temporary status outage" }, 503)
+          : response(crawlJob("succeeded"));
+      }
+      return response({ detail: `Unexpected request: ${url}` }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Dashboard />);
+    expect(await screen.findByRole("heading", { name: "Orbit Labs overview" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Crawl website" })).toBeEnabled();
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Crawl website" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(screen.getByText("Crawl status check paused")).toBeVisible();
+    expect(screen.getByText("Temporary status outage")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry status check" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(screen.getByText("Website crawl succeeded")).toBeVisible();
+    expect(statusReads).toBe(2);
   });
 });
