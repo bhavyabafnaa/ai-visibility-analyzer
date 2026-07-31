@@ -29,9 +29,15 @@ worker-to-website boundary after URL validation, public-address resolution, and 
 ### Frontend
 
 The Next.js TypeScript application owns browser-facing onboarding, provider/query launch
-controls, evidence tables, deterministic metric presentation, claim review, and ranked
-recommendations. Browser calls use the same-origin `/api/geolens` route. The Next.js server reads
-the server-only `GEOLENS_API_URL`; no provider key is a public frontend variable.
+controls, explicit website-crawl launch and status polling, evidence tables, deterministic metric
+presentation, claim review, and ranked recommendations. Browser calls use the same-origin
+`/api/geolens` route. The Next.js server reads the server-only `GEOLENS_API_URL`; no provider key
+is a public frontend variable.
+
+For the active project, the frontend queues a crawl through `POST /sites/{site_id}/crawls` and
+polls `GET /crawls/{crawl_id}` approximately every two seconds while the job is pending or
+running. Polling stops at a terminal status, project switch, or component cleanup. Only a
+succeeded active-project crawl is passed as `crawl_job_id` to `POST /analyses`.
 
 ### Backend
 
@@ -78,6 +84,8 @@ Supplying `project_id` persists the provider responses and runs deterministic an
 Supplying `crawl_job_id` adds the selected crawl's page text to the evidence set. Supplying
 `claim_classifier_provider` explicitly enables model-assisted claim classification; there is no
 implicit classifier call.
+
+In v0.1, crawl jobs execute through Celery, while provider analyses execute synchronously inside the API request. Moving analyses to background workers is planned for v0.2.
 
 ### Analysis boundaries
 
