@@ -5,6 +5,8 @@ export type ProviderStatus =
   | "rate_limited"
   | "disabled";
 
+export type CrawlJobStatus = "pending" | "running" | "succeeded" | "failed";
+
 export interface SiteResponse {
   id: string;
   project_id: string;
@@ -176,7 +178,7 @@ export interface AnalysisClaimResponse {
 export interface CrawlJobResponse {
   id: string;
   site_id: string;
-  status: "pending" | "running" | "succeeded" | "failed";
+  status: CrawlJobStatus;
   started_at: string | null;
   completed_at: string | null;
   error_message: string | null;

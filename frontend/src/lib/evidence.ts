@@ -136,6 +136,15 @@ export function safeExternalUrl(value: string | null): string | null {
   }
 }
 
+export function isReservedExampleUrl(value: string): boolean {
+  try {
+    const hostname = new URL(value).hostname.toLocaleLowerCase().replace(/\.$/, "");
+    return hostname === "example" || hostname.endsWith(".example");
+  } catch {
+    return false;
+  }
+}
+
 function matchesTargetDomain(domain: string | null, targetDomain: string | null): boolean {
   if (!domain || !targetDomain) return false;
   return domain === targetDomain || domain.endsWith(`.${targetDomain}`);
