@@ -2,9 +2,18 @@
 
 ## Status and scope
 
-This document describes the 0.1.0 release-candidate topology: project persistence, secure crawl
-pipeline, provider-neutral prompt execution, deterministic measurements, opt-in model-assisted
-claim classification, and the evidence dashboard. Authentication and multi-tenant isolation are
+This document describes the GeoLens 0.1.0 release-candidate topology:
+
+- project and comparison-set persistence;
+- secure website crawling;
+- asynchronous provider analysis;
+- provider-neutral response normalization;
+- deterministic visibility measurement;
+- opt-in model-assisted claim classification;
+- evidence-linked recommendations;
+- a Next.js evidence dashboard.
+
+Authentication, authorization, tenant isolation, and production observability are
 not implemented.
 
 ## System context
@@ -13,144 +22,360 @@ not implemented.
 flowchart LR
     User[Browser] --> Web[Next.js frontend and same-origin proxy]
     Web --> API[FastAPI API]
+
     API --> DB[(PostgreSQL)]
     API --> Queue[(Redis)]
-    API --> Providers[AI and search providers]
+
     Queue --> Worker[Celery worker]
     Worker --> DB
+    Worker --> Providers[AI and search providers]
     Worker --> Site[Authorized public website]
 ```
 
-Provider keys cross only the API-to-provider boundary. User-supplied crawl targets cross only the
-worker-to-website boundary after URL validation, public-address resolution, and address pinning.
+Provider credentials remain on the backend. Browser code never receives provider
+keys.
+
+User-supplied crawl targets reach the crawler worker only after URL validation,
+public-address resolution, private-network rejection, and address pinning.
 
 ## Components
 
 ### Frontend
 
-The Next.js TypeScript application owns browser-facing onboarding, provider/query launch
-controls, explicit website-crawl launch and status polling, evidence tables, deterministic metric
-presentation, claim review, and ranked recommendations. Browser calls use the same-origin
-`/api/geolens` route. The Next.js server reads the server-only `GEOLENS_API_URL`; no provider key
-is a public frontend variable.
+The Next.js TypeScript application owns:
 
-For the active project, the frontend queues a crawl through `POST /sites/{site_id}/crawls` and
-polls `GET /crawls/{crawl_id}` approximately every two seconds while the job is pending or
-running. Polling stops at a terminal status, project switch, or component cleanup. Only a
-succeeded active-project crawl is passed as `crawl_job_id` to `POST /analyses`.
+- project onboarding and switching;
+- target-brand and competitor configuration;
+- explicit website-crawl launch;
+- crawl-status polling;
+- provider and query selection;
+- asynchronous analysis launch;
+- analysis-status polling;
+- deterministic metric presentation;
+- citation and entity evidence views;
+- claim review;
+- ranked GEO recommendations.
 
-### Backend
+Browser requests use the same-origin `/api/geolens` route. The Next.js server
+reads the server-only `GEOLENS_API_URL`; provider credentials are never exposed
+through public frontend environment variables.
 
-The FastAPI application owns the HTTP API boundary. It exposes:
+For the active project, the frontend queues a crawl through:
 
-- `GET /health` for process health
-- `GET /ready` for PostgreSQL readiness
-- `POST /projects` to create a project aggregate
-- `GET /projects/{project_id}` to retrieve a project
-- `GET /projects` to list projects
-- `POST /sites/{site_id}/crawls` to validate a site and queue a crawl
-- `GET /crawls/{crawl_id}` to read crawl status and result counts
-- `GET /providers` to report enabled and disabled backend providers
-- `POST /analyses` to execute selected providers against selected prompts
-- `GET /analyses/{analysis_id}/citations` for persisted normalized citations
-- `GET /analyses/{analysis_id}/entities` for mention and entity extraction results
-- `GET /analyses/{analysis_id}/scores` for deterministic metrics and disclosed claim risk
-- `GET /analyses/{analysis_id}/claims` for claim assessments and evidence references
-- FastAPI's generated OpenAPI schema and documentation
+```text
+POST /sites/{site_id}/crawls
+```
 
-Routes validate and serialize HTTP data, services coordinate use cases and transactions, and
-repositories own SQLAlchemy queries. The package uses a `src` layout so imports resolve from
-the installed application rather than the repository working directory.
+It polls:
+
+```text
+GET /crawls/{crawl_id}
+```
+
+approximately every two seconds while the crawl is `pending` or `running`.
+Polling stops when the job succeeds, fails, the project changes, or the component
+is cleaned up.
+
+Only a succeeded crawl belonging to the active project is passed as
+`crawl_job_id` when an analysis is submitted.
+
+The frontend starts an analysis through:
+
+```text
+POST /analyses
+```
+
+The API returns HTTP 202 with a persisted pending run. The frontend then polls:
+
+```text
+GET /analyses/{analysis_id}
+```
+
+until the run reaches:
+
+- `succeeded`
+- `completed_with_errors`
+- `failed`
+
+Persisted citation, entity, score, and claim endpoints are loaded after analysis
+completion.
+
+### Backend API
+
+The FastAPI application owns the HTTP boundary and exposes:
+
+- `GET /health` — process liveness;
+- `GET /ready` — PostgreSQL readiness;
+- `POST /projects` — create a project aggregate;
+- `GET /projects` — list projects;
+- `GET /projects/{project_id}` — retrieve a project;
+- `POST /sites/{site_id}/crawls` — validate and queue a crawl;
+- `GET /crawls/{crawl_id}` — retrieve crawl status and counts;
+- `GET /providers` — report provider availability;
+- `POST /analyses` — persist and queue an analysis;
+- `GET /analyses/{analysis_id}` — retrieve analysis status and normalized
+  provider results;
+- `GET /analyses/{analysis_id}/citations` — retrieve normalized citations;
+- `GET /analyses/{analysis_id}/entities` — retrieve entity mentions;
+- `GET /analyses/{analysis_id}/scores` — retrieve deterministic scores and
+  disclosed claim-support risk;
+- `GET /analyses/{analysis_id}/claims` — retrieve claims and linked evidence;
+- FastAPI-generated OpenAPI documentation.
+
+Routes validate and serialize HTTP data. Services coordinate use cases and
+transactions. Repositories own SQLAlchemy persistence queries.
+
+The backend uses a `src` package layout so application imports resolve from the
+installed package rather than from the repository working directory.
+
+### Analysis submission
+
+When `POST /analyses` receives a valid request, the API:
+
+1. validates the project;
+2. validates the optional crawl and project relationship;
+3. resolves each selected provider to an exact provider/model configuration;
+4. resolves the optional claim-classifier configuration;
+5. persists a pending analysis run;
+6. persists prompts and exact provider/model identifiers;
+7. queues the analysis UUID through Redis and Celery;
+8. returns HTTP 202.
+
+Persisting exact provider/model configurations prevents a queued job from
+silently running against a different model after an environment change.
+
+If the worker's active provider model does not match the queued configuration,
+the job fails rather than substituting another provider or model.
+
+### Celery worker
+
+The Celery worker executes both crawl jobs and provider-analysis jobs.
+
+For an analysis job, the worker:
+
+1. loads the persisted run;
+2. marks it `running`;
+3. reconstructs the exact provider configuration;
+4. verifies model-configuration consistency;
+5. executes the provider/prompt matrix;
+6. normalizes responses, citations, errors, token usage, and latency;
+7. calculates deterministic visibility metrics;
+8. retrieves crawl and citation evidence;
+9. optionally runs explicit claim classification;
+10. persists scores, entities, claims, and evidence;
+11. marks the run `succeeded`, `completed_with_errors`, or `failed`.
+
+Provider failures are preserved as normalized execution results. Failed,
+disabled, rate-limited, and timed-out executions are excluded from deterministic
+metric denominators.
 
 ### Provider adapters
 
-Provider clients are created during the backend application lifespan and never exposed to the
-frontend. A neutral contract carries provider and model identifiers, response text, normalized
-citations, raw JSON, token usage, latency, status, and structured errors. Analysis orchestration
-depends only on that contract.
+Provider clients are created on the backend and conform to a provider-neutral
+contract containing:
 
-`MockProvider` supplies deterministic recorded and synthetic results. OpenAI uses the Responses
-API with hosted web search, Gemini uses the Interactions API with Google Search, and Perplexity
-uses Sonar. Each adapter owns its request and citation parsing at the infrastructure edge. Shared
-HTTP behavior enforces timeouts, bounded retries, exponential backoff, `Retry-After` handling,
-and explicit terminal rate-limit errors.
+- provider name;
+- model identifier;
+- response text;
+- normalized citations;
+- raw response JSON;
+- token usage;
+- latency;
+- status;
+- structured errors.
 
-Missing credentials install a disabled placeholder under that provider's own name. Selecting it
-returns a disabled result; the registry never routes the request to another provider. The
-analysis endpoint runs the provider/prompt matrix concurrently and returns results in stable
-provider-then-prompt order.
+`MockProvider` supplies deterministic local responses.
 
-Supplying `project_id` persists the provider responses and runs deterministic analysis.
-Supplying `crawl_job_id` adds the selected crawl's page text to the evidence set. Supplying
-`claim_classifier_provider` explicitly enables model-assisted claim classification; there is no
-implicit classifier call.
+The live adapters currently support:
 
-In v0.1, crawl jobs execute through Celery, while provider analyses execute synchronously inside the API request. Moving analyses to background workers is planned for v0.2.
+- OpenAI Responses API with hosted web search;
+- Gemini with Google Search grounding;
+- Perplexity Sonar.
+
+Each adapter owns its provider-specific request and citation parsing at the
+infrastructure edge.
+
+Shared HTTP behavior applies:
+
+- request timeouts;
+- bounded retries;
+- exponential backoff;
+- bounded `Retry-After` handling;
+- explicit rate-limit errors.
+
+Missing credentials install a disabled provider under its own name. GeoLens
+never silently falls back from one provider to another.
+
+Live-provider credentials require an explicit model identifier. Model names are
+environment-configured because provider access and model availability can change.
 
 ### Analysis boundaries
 
-The framework-independent `geolens_api.analysis` package owns alias matching, normalized
-citation domains, mention position, entity extraction, evidence retrieval, deterministic metric
-formulas, and deterministic aggregation of claim labels. It does not import FastAPI,
-SQLAlchemy, Redis, or provider adapters.
+The framework-independent `geolens_api.analysis` package owns:
 
-The claim-classifier protocol is the boundary between those deterministic rules and model
-judgment. A provider adapter classifies only a segmented claim against retrieved evidence.
-Persistence stores the classifier/provider identity, confidence, explanation, and evidence
-references. Aggregate claim risk is explicitly disclosed as a model-assisted estimate and
-never as objective truth.
+- alias and competitor matching;
+- normalized citation-domain extraction;
+- mention position;
+- deterministic entity extraction;
+- evidence chunking and retrieval;
+- visibility formulas;
+- citation formulas;
+- rank-weighted share-of-voice calculation;
+- entity coverage;
+- deterministic aggregation of claim assessments.
+
+It does not depend on FastAPI, SQLAlchemy, Redis, Celery, Next.js, or concrete
+provider adapters.
+
+The claim-classifier protocol separates deterministic evidence processing from
+model judgment.
+
+A classifier evaluates only a segmented claim against retrieved evidence.
+Persistence records:
+
+- classification;
+- confidence;
+- explanation;
+- provider;
+- model identifier;
+- evidence references.
+
+Aggregate claim-support risk is disclosed as a model-assisted prioritization
+estimate and never represented as objective truth.
 
 ### PostgreSQL
 
-PostgreSQL stores projects, their primary sites and competitors, crawl-job and analysis-run
-lifecycle records, provider responses, normalized citations, entity mentions, scores, claims,
-claim evidence, extracted crawl pages, and per-URL crawl errors. SQLAlchemy provides
-asynchronous sessions through `asyncpg`; Alembic owns schema migrations. Primary keys are
-UUIDs and all timestamps are timezone-aware.
+PostgreSQL stores:
 
-### Crawler and worker
+- projects;
+- primary sites;
+- competitors;
+- crawl jobs;
+- crawl pages;
+- crawl errors;
+- analysis runs;
+- queued prompts;
+- exact provider/model configurations;
+- Celery task identifiers;
+- provider responses;
+- raw provider JSON;
+- normalized citations;
+- entity mentions;
+- deterministic scores;
+- claims;
+- claim evidence.
 
-Redis is the Celery broker and result backend. The API commits a pending crawl job before
-enqueuing its UUID. A worker marks it running, crawls with HTTPX, persists extracted pages and
-errors, and records terminal counts and status.
+SQLAlchemy provides asynchronous database sessions through `asyncpg`. Alembic
+owns schema migrations. Primary keys are UUIDs, and timestamps are
+timezone-aware.
 
-The crawler resolves and pins public IP addresses before connecting, revalidates redirects,
-stays on the exact configured hostname, parses robots and sitemaps, and streams bounded
-responses. Sitemap URLs have deterministic priority over link-discovered URLs. Page work is
-processed in stable batches so concurrency cannot change the selected page set. Canonical
-identities and normalized URLs are deduplicated.
+### Crawler
 
-HTML extraction stores canonical URL, title, description, headings, main text, JSON-LD,
-internal links, and a SHA-256 hash of the fetched content. JavaScript rendering is optional
-behind an interface whose implementations must enforce the same hostname, address, timeout,
-and size policies; Playwright is not installed by default.
+The crawler:
 
-## Runtime topology
+- accepts only HTTP and HTTPS targets;
+- rejects credentials embedded in URLs;
+- rejects localhost, private, link-local, metadata, multicast, reserved, and
+  otherwise non-public addresses;
+- resolves and pins public addresses before connecting;
+- revalidates redirects;
+- remains on the configured hostname;
+- reads robots rules;
+- discovers and prioritizes sitemap URLs;
+- normalizes and deduplicates URLs;
+- streams bounded responses;
+- records per-page errors;
+- processes page work in deterministic batches.
 
-Docker Compose supplies one container for each component and health checks for PostgreSQL,
-Redis, API, worker, and frontend. PostgreSQL and Redis readiness gate the API. The API entrypoint
-runs `alembic upgrade head` before starting Uvicorn. API database readiness gates the worker and
-frontend, so queued work cannot begin against an unmigrated schema.
+HTML extraction stores:
 
-The `/health` response means only that the API process can serve HTTP. `/ready` executes a
-database query and returns HTTP 503 while PostgreSQL is unavailable. A Redis failure during
-crawl creation is surfaced as HTTP 503 and persisted on the crawl job.
+- canonical URL;
+- title;
+- meta description;
+- headings;
+- main text;
+- JSON-LD;
+- internal links;
+- SHA-256 content hash.
 
-The API and worker use the same backend image and run as an unprivileged application user. Only
-the API enables startup migrations. This is safe for the single-API Compose topology; a scaled
-deployment needs one external serialized migration job.
+JavaScript rendering is optional behind an interface. No renderer is bundled in
+GeoLens 0.1.0.
 
-## Configuration
+### Redis and job queues
 
-Configuration is passed through environment variables. `.env.example` contains local,
-non-sensitive defaults and may be copied to `.env`. Real secrets must never be committed.
-Provider model names, API keys, request timeouts, retry limits, and backoff caps are configured
-through environment variables. Empty provider keys disable their provider. Secrets have no
-checked-in values.
+Redis acts as the Celery broker and result backend.
 
-## Dependency direction
+The API commits a pending crawl or analysis record before enqueueing its UUID.
+The queue contains identifiers rather than complete provider responses or secret
+credentials.
 
-Code should preserve these boundaries:
+Queue failures are surfaced as HTTP 503 errors instead of silently executing
+work synchronously.
+
+### Runtime topology
+
+Docker Compose provides five services:
+
+```text
+postgres
+redis
+api
+worker
+frontend
+```
+
+PostgreSQL and Redis health gate API startup. API database readiness gates the
+worker and frontend.
+
+The API entrypoint runs:
+
+```text
+alembic upgrade head
+```
+
+before starting Uvicorn.
+
+The API and worker use the same backend image and run as an unprivileged
+application user. Only the API container applies startup migrations.
+
+This migration approach is acceptable for the single-API Compose topology. A
+scaled deployment should use one external serialized migration job.
+
+### Health semantics
+
+`GET /health` confirms that the API process can serve HTTP.
+
+`GET /ready` performs a database query and returns HTTP 503 when PostgreSQL is
+unavailable.
+
+Redis failures during crawl or analysis submission are returned as HTTP 503 and
+recorded where applicable.
+
+### Configuration
+
+Configuration is supplied through environment variables.
+
+`.env.example` contains non-sensitive local defaults and can be copied to
+`.env`. Real credentials must never be committed.
+
+Configurable values include:
+
+- database URL;
+- Redis URL;
+- crawl limits;
+- provider API keys;
+- provider model identifiers;
+- provider base URLs;
+- request timeouts;
+- retry limits;
+- backoff limits.
+
+Empty provider credentials disable the provider. A configured live-provider
+credential requires a corresponding explicit model identifier.
+
+### Dependency direction
+
+Code should preserve this direction:
 
 ```text
 HTTP/UI adapters -> application use cases -> domain definitions
@@ -159,22 +384,25 @@ HTTP/UI adapters -> application use cases -> domain definitions
                      infrastructure adapters
 ```
 
-Framework and provider objects should remain at the edges. Domain metric definitions should
-not depend on FastAPI, Next.js, a model provider, PostgreSQL, or Redis.
-
-## Crawl configuration
-
-Crawler limits use `GEOLENS_CRAWLER_*` environment variables. The checked-in example covers
-page count, depth, decoded response bytes, total request timeout, in-crawl concurrency,
-redirect count, sitemap count, renderer fallback threshold, and user agent.
+Framework and provider objects remain at the boundaries. Metric definitions do
+not depend on FastAPI, Next.js, provider SDKs, PostgreSQL, Redis, or Celery.
 
 ## Deferred decisions
 
-The following choices require business requirements and are intentionally open:
+The following remain intentionally outside GeoLens 0.1.0:
 
-- authentication, authorization, and tenant isolation
-- observability and deployment platform
-- API versioning and generated client strategy
-- aggregation windows beyond a single persisted analysis run
-- historical-run navigation and scheduled execution
-- a renderer implementation that applies the crawler SSRF policy to every subresource
+- authentication and authorization;
+- tenant isolation;
+- production observability;
+- audit logs;
+- deployment platform;
+- TLS termination;
+- API versioning;
+- historical analysis comparison;
+- historical crawl selection;
+- scheduled analyses;
+- analysis cancellation and manual retry controls;
+- aggregation windows beyond one analysis run;
+- generated API clients;
+- a JavaScript renderer that applies the crawler SSRF policy to every
+  subresource.
