@@ -33,5 +33,9 @@ class AnalysisRunResponse(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     error_message: str | None
+    celery_task_id: str | None
+    provider_configurations: list[dict[str, str]]
+    prompts: list[str]
+    claim_classifier_configuration: dict[str, str] | None
     created_at: datetime
     updated_at: datetime

@@ -3,10 +3,26 @@ from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from geolens_api.database import get_session
 from geolens_api.main import app
+from geolens_api.models import Project, Site
 from geolens_api.providers import DisabledProvider, MockProvider, ProviderRegistry
+from geolens_api.queues import get_analysis_queue
 from geolens_api.routers.analyses import get_provider_registry
+
+
+class RecordingAnalysisQueue:
+    def __init__(self) -> None:
+        self.analysis_ids: list[UUID] = []
+        self.fail = False
+
+    def enqueue(self, analysis_id: UUID) -> str:
+        if self.fail:
+            raise ConnectionError("Redis unavailable")
+        self.analysis_ids.append(analysis_id)
+        return "analysis-task-id"
 
 
 @pytest.fixture
@@ -26,66 +42,109 @@ async def provider_registry() -> AsyncIterator[ProviderRegistry]:
 
 
 @pytest.fixture
-async def client(provider_registry: ProviderRegistry) -> AsyncIterator[AsyncClient]:
+async def client(
+    session: AsyncSession,
+    provider_registry: ProviderRegistry,
+) -> AsyncIterator[tuple[AsyncClient, Project, RecordingAnalysisQueue]]:
+    project = Project(name="GeoLens", aliases=[])
+    project.site = Site(url="https://geolens.test")
+    session.add(project)
+    await session.commit()
+    queue = RecordingAnalysisQueue()
+
+    async def override_session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_provider_registry] = lambda: provider_registry
+    app.dependency_overrides[get_analysis_queue] = lambda: queue
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as test_client:
-        yield test_client
+        yield test_client, project, queue
     app.dependency_overrides.clear()
 
 
-async def test_start_analysis_executes_selected_prompt_matrix(client: AsyncClient) -> None:
-    response = await client.post(
+async def test_start_analysis_queues_selected_prompt_matrix(
+    client: tuple[AsyncClient, Project, RecordingAnalysisQueue],
+) -> None:
+    test_client, project, queue = client
+
+    response = await test_client.post(
         "/analyses",
         json={
+            "project_id": str(project.id),
             "providers": ["mock"],
             "prompts": ["What is GeoLens?", "Another prompt"],
         },
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 202
     body = response.json()
-    assert UUID(body["analysis_id"]).version == 4
-    assert body["status"] == "succeeded"
-    assert body["started_at"] <= body["completed_at"]
-    assert [result["prompt"] for result in body["results"]] == [
-        "What is GeoLens?",
-        "Another prompt",
+    analysis_id = UUID(body["analysis_id"])
+    assert queue.analysis_ids == [analysis_id]
+    assert body["status"] == "pending"
+    assert body["started_at"] is None
+    assert body["completed_at"] is None
+    assert body["celery_task_id"] == "analysis-task-id"
+    assert body["provider_configurations"] == [
+        {"name": "mock", "model_identifier": "mock-api-test"}
     ]
-    assert all(result["provider"] == "mock" for result in body["results"])
-    assert all(result["status"] == "succeeded" for result in body["results"])
-    assert all("raw_response" in result for result in body["results"])
+    assert body["prompts"] == ["What is GeoLens?", "Another prompt"]
+    assert body["results"] == []
+    assert body["persisted"] is True
+
+    status_response = await test_client.get(f"/analyses/{analysis_id}")
+    assert status_response.status_code == 200
+    assert status_response.json() == body
 
 
-async def test_disabled_selected_provider_is_returned_without_fallback(
-    client: AsyncClient,
+async def test_disabled_selected_provider_is_queued_without_fallback(
+    client: tuple[AsyncClient, Project, RecordingAnalysisQueue],
 ) -> None:
-    response = await client.post(
+    test_client, project, queue = client
+
+    response = await test_client.post(
         "/analyses",
-        json={"providers": ["openai"], "prompts": ["What is GeoLens?"]},
+        json={
+            "project_id": str(project.id),
+            "providers": ["openai"],
+            "prompts": ["What is GeoLens?"],
+        },
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 202
     body = response.json()
-    assert body["status"] == "failed"
-    assert len(body["results"]) == 1
-    assert body["results"][0]["provider"] == "openai"
-    assert body["results"][0]["status"] == "disabled"
-    assert body["results"][0]["error"]["code"] == "provider_disabled"
+    assert body["provider_configurations"] == [
+        {"name": "openai", "model_identifier": "openai-api-test"}
+    ]
+    assert queue.analysis_ids == [UUID(body["analysis_id"])]
 
 
-async def test_unknown_selected_provider_is_rejected(client: AsyncClient) -> None:
-    response = await client.post(
+async def test_unknown_selected_provider_is_rejected(
+    client: tuple[AsyncClient, Project, RecordingAnalysisQueue],
+) -> None:
+    test_client, project, queue = client
+
+    response = await test_client.post(
         "/analyses",
-        json={"providers": ["unknown"], "prompts": ["What is GeoLens?"]},
+        json={
+            "project_id": str(project.id),
+            "providers": ["unknown"],
+            "prompts": ["What is GeoLens?"],
+        },
     )
 
     assert response.status_code == 422
     assert response.json() == {"detail": "Unknown provider: unknown"}
+    assert queue.analysis_ids == []
 
 
-async def test_provider_availability_is_explicit(client: AsyncClient) -> None:
-    response = await client.get("/providers")
+async def test_provider_availability_is_explicit(
+    client: tuple[AsyncClient, Project, RecordingAnalysisQueue],
+) -> None:
+    test_client, _, _ = client
+
+    response = await test_client.get("/providers")
 
     assert response.status_code == 200
     assert response.json() == [
@@ -104,25 +163,62 @@ async def test_provider_availability_is_explicit(client: AsyncClient) -> None:
     ]
 
 
-async def test_analysis_rejects_duplicate_or_blank_inputs(client: AsyncClient) -> None:
-    duplicate_response = await client.post(
+async def test_analysis_rejects_duplicate_or_blank_inputs(
+    client: tuple[AsyncClient, Project, RecordingAnalysisQueue],
+) -> None:
+    test_client, project, _ = client
+    duplicate_response = await test_client.post(
         "/analyses",
-        json={"providers": ["mock", "MOCK"], "prompts": ["What is GeoLens?"]},
+        json={
+            "project_id": str(project.id),
+            "providers": ["mock", "MOCK"],
+            "prompts": ["What is GeoLens?"],
+        },
     )
-    blank_response = await client.post(
+    blank_response = await test_client.post(
         "/analyses",
-        json={"providers": ["mock"], "prompts": [" "]},
+        json={
+            "project_id": str(project.id),
+            "providers": ["mock"],
+            "prompts": [" "],
+        },
     )
 
     assert duplicate_response.status_code == 422
     assert blank_response.status_code == 422
 
 
-async def test_analysis_rejects_unbounded_prompt_input(client: AsyncClient) -> None:
-    response = await client.post(
+async def test_analysis_rejects_unbounded_prompt_input(
+    client: tuple[AsyncClient, Project, RecordingAnalysisQueue],
+) -> None:
+    test_client, project, _ = client
+    response = await test_client.post(
         "/analyses",
-        json={"providers": ["mock"], "prompts": ["x" * 10_001]},
+        json={
+            "project_id": str(project.id),
+            "providers": ["mock"],
+            "prompts": ["x" * 10_001],
+        },
     )
 
     assert response.status_code == 422
     assert "prompts cannot exceed 10000 characters" in response.text
+
+
+async def test_analysis_queue_failure_is_explicit(
+    client: tuple[AsyncClient, Project, RecordingAnalysisQueue],
+) -> None:
+    test_client, project, queue = client
+
+    queue.fail = True
+    response = await test_client.post(
+        "/analyses",
+        json={
+            "project_id": str(project.id),
+            "providers": ["mock"],
+            "prompts": ["What is GeoLens?"],
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "The analysis could not be queued"}

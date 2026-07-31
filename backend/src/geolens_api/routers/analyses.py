@@ -9,6 +9,7 @@ from geolens_api.providers.registry import (
     ProviderRegistry,
     UnknownProviderError,
 )
+from geolens_api.queues import AnalysisQueue, get_analysis_queue
 from geolens_api.schemas.analysis import (
     AnalysisCitationResponse,
     AnalysisClaimResponse,
@@ -23,6 +24,7 @@ from geolens_api.services.analyses import (
     AnalysisCrawlProjectMismatchError,
     AnalysisNotFoundError,
     AnalysisProjectNotFoundError,
+    AnalysisQueueUnavailableError,
     AnalysisResultsService,
     AnalysisService,
 )
@@ -42,6 +44,7 @@ def get_provider_registry(request: Request) -> ProviderRegistry:
 
 ProviderRegistryDependency = Annotated[ProviderRegistry, Depends(get_provider_registry)]
 SessionDependency = Annotated[AsyncSession, Depends(get_session)]
+QueueDependency = Annotated[AnalysisQueue, Depends(get_analysis_queue)]
 
 
 @router.get("/providers", response_model=list[ProviderAvailabilityResponse])
@@ -57,15 +60,16 @@ async def list_providers(
 @router.post(
     "/analyses",
     response_model=AnalysisStartResponse,
-    status_code=status.HTTP_201_CREATED,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def start_analysis(
     data: AnalysisStartRequest,
     registry: ProviderRegistryDependency,
     session: SessionDependency,
+    queue: QueueDependency,
 ) -> AnalysisStartResponse:
     try:
-        return await AnalysisService(registry, session).start(data)
+        return await AnalysisService(registry, session, queue).submit(data)
     except UnknownProviderError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -81,6 +85,26 @@ async def start_analysis(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(error),
         ) from error
+    except AnalysisQueueUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(error),
+        ) from error
+
+
+@router.get(
+    "/analyses/{analysis_id}",
+    response_model=AnalysisStartResponse,
+)
+async def get_analysis(
+    analysis_id: UUID,
+    registry: ProviderRegistryDependency,
+    session: SessionDependency,
+) -> AnalysisStartResponse:
+    try:
+        return await AnalysisService(registry, session).get(analysis_id)
+    except AnalysisNotFoundError as error:
+        raise _analysis_not_found(error) from error
 
 
 @router.get(

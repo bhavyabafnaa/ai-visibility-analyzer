@@ -66,6 +66,9 @@ async def test_initial_migration_creates_expected_postgresql_schema() -> None:
         project_columns = await connection.run_sync(
             lambda sync_connection: inspect(sync_connection).get_columns("projects")
         )
+        analysis_run_columns = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).get_columns("analysis_runs")
+        )
     await engine.dispose()
 
     assert {
@@ -91,6 +94,12 @@ async def test_initial_migration_creates_expected_postgresql_schema() -> None:
     updated_at_type = timestamps["updated_at"]["type"]
     assert hasattr(created_at_type, "timezone") and created_at_type.timezone
     assert hasattr(updated_at_type, "timezone") and updated_at_type.timezone
+    assert {
+        "celery_task_id",
+        "provider_configurations",
+        "prompts",
+        "claim_classifier_configuration",
+    }.issubset({column["name"] for column in analysis_run_columns})
 
 
 async def test_project_api_and_readiness_use_postgresql(client: AsyncClient) -> None:
