@@ -1,10 +1,17 @@
-# GeoLens
+# GeoLens — AI Visibility Analyzer
 
-GeoLens is a release-candidate AI visibility and citation intelligence application. It runs a
-provider/query matrix, normalizes answer evidence, calculates deterministic visibility metrics,
-and produces evidence-linked review recommendations. The monorepo contains a FastAPI API, a
-Next.js dashboard, PostgreSQL persistence, a Redis-backed Celery worker, and a bounded website
-crawler.
+[![CI](https://github.com/bhavyabafnaa/ai-visibility-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/bhavyabafnaa/ai-visibility-analyzer/actions/workflows/ci.yml)
+[![Container builds](https://github.com/bhavyabafnaa/ai-visibility-analyzer/actions/workflows/container-build.yml/badge.svg)](https://github.com/bhavyabafnaa/ai-visibility-analyzer/actions/workflows/container-build.yml)
+
+For recruiters and engineering reviewers, GeoLens is a release-candidate full-stack project that
+demonstrates how an AI-facing product can remain auditable: provider responses are normalized and
+preserved, measurements are deterministic, recommendations link back to evidence, and website
+crawling is bounded by explicit security controls.
+
+GeoLens runs a provider/query matrix to measure brand visibility, citation coverage, source share,
+and competitive entity coverage. The monorepo combines a FastAPI API, a Next.js dashboard,
+PostgreSQL persistence, a Redis-backed Celery worker, and a bounded website crawler behind a
+provider-neutral contract.
 
 Version: **0.1.0**
 
@@ -92,23 +99,57 @@ docker compose down --volumes
 - aliases matching the pre-filled dashboard prompt set
 
 The backend-only `MockProvider` supplies deterministic sample answers and citations for the four
-demo prompts. The `.example` domains are deliberately non-routable examples; do not start a crawl
-for the seeded project. Follow the [demo walkthrough](docs/demo-walkthrough.md) for the expected
-screens and evidence states.
+demo prompts. The `.example` domains are deliberately non-routable examples, so the dashboard
+disables crawling for the seeded project. MockProvider analysis remains available without crawl
+evidence. Follow the [demo walkthrough](docs/demo-walkthrough.md) for the expected screens and
+evidence states.
 
-## Screenshots
+## Dashboard
 
-> **Screenshot placeholder — Project setup:** capture the pre-filled Acme Cloud onboarding screen
-> at desktop width before the 0.1.0 announcement.
+The dashboard supports project creation and switching, provider and query selection, persisted
+analysis evidence, deterministic metrics, claim review, and ranked recommendations. Its Website
+evidence panel can explicitly queue a bounded crawl and poll its status. A succeeded crawl is
+optional evidence: the dashboard attaches its `crawl_job_id` to the next analysis, while analysis
+without a crawl continues to work.
 
-> **Screenshot placeholder — Evidence overview:** capture the completed MockProvider run with the
-> five deterministic metric cards and provider/query table.
+![GeoLens overview showing deterministic metrics and evidence tables](docs/screenshots/overview.png)
 
-> **Screenshot placeholder — Recommendations:** capture the ranked recommendation cards with
-> affected queries, provider evidence, and expected metric fields visible.
+The four-query Acme MockProvider demo produces these reproducible metrics:
 
-The capture sizes, redaction rules, and target filenames are in
-[docs/screenshots/README.md](docs/screenshots/README.md).
+- **Visibility rate:** 75% (3/4)
+- **Target citation coverage:** 67% (2/3)
+- **Citation share:** 25% (2/8)
+- **Rank-weighted share of AI voice:** 31%
+- **Entity coverage:** 67% (8/12)
+
+The [query intelligence view](docs/screenshots/query-intelligence.png) exposes every provider/query
+outcome, target mention, citation state, and normalized domain. The
+[recommendations view](docs/screenshots/recommendations.png) turns those measured gaps into ranked
+actions with affected queries, provider evidence, current values, and target values.
+
+## End-to-End Workflow
+
+1. **Define the comparison set.** Create a target brand, domain, aliases, and competitors in
+   [Project setup](docs/screenshots/project-setup.png). The seeded Acme Cloud project already
+   contains the deterministic demo configuration.
+2. **Choose the execution matrix.** Review the prompts, select enabled providers, and start the
+   analysis. MockProvider needs no API key or external provider call.
+3. **Persist and normalize evidence.** GeoLens stores the raw provider response for auditability,
+   normalizes citations and entity mentions, and calculates the documented metrics.
+4. **Inspect gaps and actions.** Move from the overview into query-level evidence, citation sources,
+   entity gaps, claim review, and evidence-linked recommendations.
+5. **Optionally attach website evidence.** For a public site you are authorized to crawl, create a
+   separate project and choose **Crawl website**. The crawl moves through
+   [queued](docs/screenshots/crawl-queued.png) and running states before the dashboard shows the
+   [succeeded page and error counts](docs/screenshots/crawl-succeeded.png). The next analysis for
+   that same project attaches the succeeded crawl and confirms the
+   [evidence page count](docs/screenshots/evidence-attached.png).
+
+The crawl screenshots use a separate authorized-site project; they do not represent the Acme demo
+metrics or a live-provider result. The seeded `acme.example` project cannot be crawled and remains
+the deterministic, no-network MockProvider demonstration. See the
+[screenshot evidence index](docs/screenshots/README.md) and the full
+[demo walkthrough](docs/demo-walkthrough.md).
 
 ## Provider execution
 
@@ -139,6 +180,9 @@ estimate, never objective truth.
 Provider endpoints, model availability, billing, data handling, and response schemas are owned
 by their respective vendors and may change independently. Read the
 [provider/API disclaimer](docs/provider-disclaimer.md) before enabling live calls.
+
+Model identifiers are environment-configured and must be set to models enabled for the developer's
+provider account. Provider model availability may change.
 
 ## Local development
 

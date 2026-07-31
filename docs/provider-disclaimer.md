@@ -10,6 +10,8 @@ GeoLens release. The checked-in defaults and recorded fixtures describe the adap
 the time of the 0.1.0 release; they are not a guarantee that an account can access a named model
 or that a future response will retain the same shape.
 
+Model identifiers are environment-configured and must be set to models enabled for the developer's provider account. Provider model availability may change.
+
 Before enabling a live provider:
 
 1. verify the current provider documentation and terms for the configured account and region;
